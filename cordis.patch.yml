@@ -1,0 +1,8 @@
+# DSH Console Sentinel bundle layer.
+# Windows-only: the plugin enumerates Win32 console windows via user32, so it
+# is disabled on every other platform (the loader evaluates `disabled` on each
+# mount, and the plugin itself also guards at apply() time).
+- insert:
+    - id: dsh-console-sentinel
+      name: dsh-console-sentinel
+      disabled: !!js process.platform !== 'win32'

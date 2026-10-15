@@ -1,0 +1,63 @@
+{
+  "name": "dsh-console-sentinel",
+  "version": "0.1.2",
+  "description": "DSH console window sentinel - auto-hides idle AI/script console windows on Windows",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "lib",
+    "lib/**/*.js",
+    "cordis.patch.yml",
+    "LICENSE",
+    "README.md",
+    "README.zh.md",
+    "locale/*.json",
+    "icon.svg",
+    "README-zh.md",
+    "README-es.md",
+    "README-pt.md",
+    "README-hi.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "console",
+    "window",
+    "powershell",
+    "windows"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.2",
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2",
+    "@deepseek-ai/schemastery": ">=3.18.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": false
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": false
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": false
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "packageManager": "pnpm@11.7.0"
+}

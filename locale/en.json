@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Console Sentinel",
+    "description": "Watch the browser console and DSH logs, surface errors early, and auto-hide finished console windows."
+  }
+}
