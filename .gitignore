@@ -3,3 +3,7 @@ node_modules/
 *.bak
 .DS_Store
 Thumbs.db
+# local development scratch / notes (not for release)
+dev-log.md
+HANDOFF-*.md
+_cs_*.mjs

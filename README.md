@@ -47,6 +47,27 @@ Bundle 插件（`dsh.bundle.patch`）：进入 profile bundle 栈，重启后生
   对前台窗口操作需传 `force`。
 - `console_windows_sweep` —— 一次性对所有空闲且在范围内的窗口执行动作
   （跑完一批 Fluent 任务后清任务栏很好用）。
+- `desktop_windows_cleanup` —— **一键关闭其他窗口**：关闭桌面上除前台、自身、
+  系统外壳和受保护进程以外的所有应用窗口（`dryRun` 先出计划；`protected` /
+  `keepTitle` / `keepPid` 可临时加固保护）。
+- `sentinel_whitelist` —— 管理**持久化豁免白名单**：`list` / `add` / `remove` / `reset`，
+  `kind=process`（按映像名，如 `code.exe`）或 `kind=title`（按标题子串）。
+  白名单同时作用于自动隐藏/关闭与一键关闭窗口，落盘到
+  `~/.dsh/console-sentinel/whitelist.json`。
+
+## 设置面板（DSH 设置页 · 0.3.0+）
+
+插件在 DSH「设置」里注册「控制台哨兵」分区（客户端 bundle `lib/client.js`），
+不记工具名也能点操作：
+
+- **概览**：总窗口 / 空壳 PowerShell / 可见空壳 / 已隐藏 计数 + 「隐藏可见空壳」。
+- **任务栏窗口清理**：预演 / 一键关闭其他窗口（前台、系统进程、白名单自动跳过）。
+- **控制台窗口**：逐行显示进程名 / 标题 / hwnd / pid / CPU / 空闲秒数 / 子进程数，行内可隐藏 / 显示 / 关闭。
+- **豁免白名单**：进程名与标题关键字 标签式增删、清空，即时落盘。
+
+面板通过宿主路由 `/dsh-console-sentinel/*` 取数（客户端 fetch 根相对路径，桌面端自动带
+capability header），不使用 iframe。改 `lib/client.js` 后按 **Ctrl+Shift+R** 硬刷新；
+改宿主（`lib/index.js` / `package.json`）需**完全退出 DSH 再启动**。
 
 ## 配置（cordis.yml）
 
@@ -65,6 +86,10 @@ Bundle 插件（`dsh.bundle.patch`）：进入 profile bundle 栈，重启后生
 | `scope.orphaned` | `false` | 管理父进程已退出的控制台 |
 | `scope.scriptConsole` | `true` | 管理标题是脚本可执行文件路径的控制台（Windows Terminal 承载的脚本会话） |
 | `scope.excludeTitles` | `[]` | 标题 substring 黑名单 |
+| `scope.emptyConsole` | `true` | 把「没有任何工作子进程」的解释器控制台（PowerShell/Python/cmd 只剩 conhost）判为**空壳**，无论父链如何都纳入管理 —— 这是安全清理残留空 PowerShell 的开关（不必打开整个 `orphaned`，后者会误伤 mpiexec/fl2610/在跑的计算） |
+| `emptyConsoleAction` | `hide` | 对空壳控制台的动作：`none` \| `hide` \| `close`；独立于 `autoAction`，即便自动动作关闭也能单独生效 |
+| `whitelist.processes` | `[]` | 豁免进程映像名（如 `code.exe`），永不自动处理/一键关闭（运行时用 `sentinel_whitelist` 增删） |
+| `whitelist.titles` | `[]` | 豁免标题子串，永不自动处理/一键关闭 |
 
 ```yaml
 - id: dsh-console-sentinel
@@ -82,7 +107,9 @@ Bundle 插件（`dsh.bundle.patch`）：进入 profile bundle 栈，重启后生
 实测 `SW_SHOW` 无法恢复被隐藏的 Windows Terminal 窗口）。`close` 发 `WM_CLOSE`
 （优雅关闭，和你点 X 一样），但可能丢失未保存状态，所以从不是默认动作。
 自动动作绝不触碰：前台窗口、手动打开的控制台（`manual` 来源）、
-标题命中黑名单的窗口。每个动作都发 `console-sentinel/action` 事件并写日志。
+标题命中黑名单或**白名单**的窗口、以及 `HARD_PROTECTED_PROCESSES` 里的系统/计算进程
+（explorer、taskmgr、dsh desktop、fl2610/cx2610/mpiexec/smpd/fluent 等）。
+每个动作都发 `console-sentinel/action` 事件并写日志。
 
 ## 开发
 

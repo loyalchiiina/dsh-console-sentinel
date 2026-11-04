@@ -1,8 +1,27 @@
 # DSH Console Sentinel bundle layer.
-# Windows-only: the plugin enumerates Win32 console windows via user32, so it
-# is disabled on every other platform (the loader evaluates `disabled` on each
-# mount, and the plugin itself also guards at apply() time).
+# Windows-only: the plugin enumerates Win32 console windows via user32. The
+# platform guard lives in apply() (logs "staying inert" on non-Windows) because
+# bundle-patch YAML is parsed by a plain YAML parser that rejects custom tags -
+# putting a JS-tag expression here made the whole insert silently fail.
 - insert:
     - id: dsh-console-sentinel
       name: dsh-console-sentinel
-      disabled: !!js process.platform !== 'win32'
+      config:
+        enabled: true
+        scanIntervalSec: 10
+        cpuThresholdPct: 1
+        idleThresholdSec: 60
+        spikeTolerance: 2
+        autoAction: none
+        emptyConsoleAction: hide
+        guardForeground: true
+        scope:
+          wmiDetached: true
+          dshHost: true
+          orphaned: false
+          emptyConsole: true
+          scriptConsole: true
+          excludeTitles: []
+        whitelist:
+          processes: []
+          titles: []

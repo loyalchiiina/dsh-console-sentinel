@@ -56,6 +56,14 @@ platform and `apply()` also guards at runtime.
   output. Pass `force` to act on the focused window.
 - `console_windows_sweep` — apply the action to every idle in-scope window at
   once (handy after a batch of Fluent jobs).
+- `desktop_windows_cleanup` — **close all other windows**: close every desktop
+  app window except the focused one, self, shell classes, and protected
+  processes (`dryRun` first for a plan; `protected` / `keepTitle` / `keepPid`
+  add temporary protection).
+- `sentinel_whitelist` — manage the **persistent exemption whitelist**:
+  `list` / `add` / `remove` / `reset`, `kind=process` (image name, e.g.
+  `code.exe`) or `kind=title` (title substring). Applies to both auto-actions
+  and desktop cleanup; stored at `~/.dsh/console-sentinel/whitelist.json`.
 
 ## Config (cordis.yml)
 
@@ -74,6 +82,10 @@ platform and `apply()` also guards at runtime.
 | `scope.orphaned` | `false` | manage consoles whose parent already exited |
 | `scope.scriptConsole` | `true` | manage consoles whose title is a script executable path (Windows Terminal windows hosting a scripted session) |
 | `scope.excludeTitles` | `[]` | title substring blocklist |
+| `scope.emptyConsole` | `true` | treat an interpreter console (PowerShell/Python/cmd with only conhost and **no workload child**) as an empty shell and manage it regardless of parent chain — the safe way to clean up leftover empty PowerShell windows without enabling the whole `orphaned` scope (which would also match mpiexec / fl2610 / live compute) |
+| `emptyConsoleAction` | `hide` | action for empty shells: `none` \| `hide` \| `close`; independent of `autoAction` |
+| `whitelist.processes` | `[]` | exempt image names (e.g. `code.exe`), never auto-managed nor bulk-closed (edit at runtime via `sentinel_whitelist`) |
+| `whitelist.titles` | `[]` | exempt title substrings, never auto-managed nor bulk-closed |
 
 ```yaml
 - id: dsh-console-sentinel
@@ -92,19 +104,24 @@ output are untouched; `console_window_action` with `show` restores it
 window invisible). `close` sends `WM_CLOSE` (graceful, same as clicking the
 X) but may lose unsaved state, so it is never the default. Automatic actions
 never touch the focused window, manually opened consoles (`manual` source),
-or title-blocklisted windows. Every action is emitted as
+title-blocklisted or **whitelisted** windows, or any process in
+`HARD_PROTECTED_PROCESSES` (explorer, taskmgr, dsh desktop,
+fl2610/cx2610/mpiexec/smpd/fluent, etc.). Every action is emitted as
 `console-sentinel/action` and logged.
 
 ## Development
 
 ```
-lib/index.js   Cordis plugin: config, scan scheduler, tools
-lib/logic.js   pure ledger/idle state machine (unit-tested)
-lib/probe.js   embedded PowerShell probe + window actions
-tests/         node-only regression tests, no live Windows needed
+lib/index.js      Cordis plugin: config, scan scheduler, tools
+lib/logic.js      pure ledger/idle state machine + empty-console detection (unit-tested)
+lib/probe.js      embedded PowerShell probe + window actions
+lib/desktop.js    desktop-wide window close (一键关闭其他窗口)
+lib/whitelist.js  persistent exemption whitelist (JSON)
+tests/            node-only regression tests, no live Windows needed
 ```
 
-`node tests/logic.test.mjs` — 24 assertions covering classification, idle
-accumulation, busy-blip reset, scope guards, GC, and ordering.
+`node --test tests/*.test.mjs` — 51 assertions (logic 29 + desktop 17 +
+tool-output 5) covering classification, idle accumulation, busy-blip reset,
+scope guards, empty-console detection, whitelist, GC, and ordering.
 
 MIT License.

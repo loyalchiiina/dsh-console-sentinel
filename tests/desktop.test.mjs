@@ -108,7 +108,9 @@ check('custom list replaces default', () => {
   assert.equal(kept[0].keepReason, 'protected-process')
 })
 check('default list contents', () => {
-  assert.deepEqual(DEFAULT_PROTECTED_PROCESSES, ['powershell', 'pwsh', 'python', 'pythonw'])
+  assert.deepEqual(
+    DEFAULT_PROTECTED_PROCESSES,
+    ['powershell', 'pwsh', 'python', 'pythonw', 'dsh desktop', 'explorer', 'taskmgr', 'fluent', 'launcher1'])
   assert.ok(SHELL_CLASSES.includes('Shell_TrayWnd'))
 })
 

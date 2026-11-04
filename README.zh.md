@@ -47,6 +47,24 @@ Bundle 插件（`dsh.bundle.patch`）：进入 profile bundle 栈，重启后生
   对前台窗口操作需传 `force`。
 - `console_windows_sweep` —— 一次性对所有空闲且在范围内的窗口执行动作
   （跑完一批 Fluent 任务后清任务栏很好用）。
+- `desktop_windows_cleanup` —— 一键关闭其它程序的窗口（受保护进程与白名单自动跳过）。
+- `sentinel_whitelist` —— 管理豁免白名单（list/add/remove/reset，kind=process|title）。
+
+## 设置面板（DSH 设置页 · 0.3.0+）
+
+插件在 DSH「设置」里注册了一个「控制台哨兵」分区（客户端 bundle `lib/client.js`），
+不用记工具名，点按钮即可：
+
+- **概览**：总窗口 / 空壳 PowerShell / 可见空壳 / 已隐藏 四个计数；「隐藏可见空壳」一键清理。
+- **任务栏窗口清理**：先「预演」列出将被关闭的窗口，再「一键关闭其他窗口」真正执行
+  （前台窗口、系统进程、白名单自动跳过）。
+- **控制台窗口**：逐行显示进程名 / 标题 / hwnd / pid / CPU / 空闲秒数 / 子进程数，每行可隐藏 / 显示 / 关闭。
+- **豁免白名单**：以标签形式管理进程名与窗口标题关键字，改动即时落盘
+  `~/.dsh/console-sentinel/whitelist.json`。
+
+面板通过宿主路由 `/dsh-console-sentinel/*` 取数（客户端 fetch 相对路径，桌面端自动带
+capability header），不使用 iframe。改 `lib/client.js` 后按 **Ctrl+Shift+R** 硬刷新；
+改宿主（`lib/index.js` / `package.json`）需**完全退出 DSH 再启动**。
 
 ## 配置（cordis.yml）
 
@@ -87,11 +105,17 @@ Bundle 插件（`dsh.bundle.patch`）：进入 profile bundle 栈，重启后生
 ## 开发
 
 ```
-lib/index.js   Cordis 插件：配置、扫描调度、工具
-lib/logic.js   纯台账/空闲状态机（单测覆盖）
-lib/probe.js   内嵌 PowerShell 探针 + 窗口动作
-tests/         仅 node 的回归测试，不需要真实 Windows
+lib/index.js     Cordis 插件：配置、扫描调度、工具、设置面板 HTTP 路由
+lib/logic.js     纯台账/空闲状态机 + 空壳判定（单测覆盖）
+lib/probe.js     内嵌 PowerShell 探针（含父子进程表）+ 窗口动作
+lib/desktop.js   任务栏窗口清理（受保护进程/白名单/前台守卫）
+lib/whitelist.js 持久化豁免白名单（~/.dsh/console-sentinel/whitelist.json）
+lib/client.js    设置面板客户端 bundle（__ModuleLoader__，settings.section）
+tests/           仅 node 的回归测试，不需要真实 Windows
 ```
+
+`node --test tests/` —— logic / desktop / tool-output / client 四组断言；
+client 组用 DOM stub 评估真实 bundle，覆盖注册契约与首屏渲染。
 
 `node tests/logic.test.mjs` —— 24 项断言，覆盖来源归类、空闲累积、
 忙碌脉冲重置、范围守卫、台账 GC、排序。
