@@ -1,123 +1,117 @@
 # dsh-console-sentinel
 
-自动隐藏（或关闭）Windows 上空闲的 AI/脚本控制台窗口 —— 一个
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 插件。
+[![npm](https://img.shields.io/npm/v/dsh-console-sentinel.svg)](https://www.npmjs.com/package/dsh-console-sentinel)
+[![license](https://img.shields.io/npm/l/dsh-console-sentinel.svg)](./LICENSE)
+![platform](https://img.shields.io/badge/platform-Windows%20only-0078D4)
 
-长时间运行的自动化工作流（Fluent 无人值守任务、批量脚本、WMI 拉起的脱离进程）
-会在任务栏堆下一排 PowerShell/Python 黑窗口。你分不清哪些还在跑，也不敢随手关。
-本插件替你追踪它们、区分「在忙」和「用完了」，并把用完的隐藏掉 —— 进程继续跑、
-数据不丢，每个窗口都能随时叫回来。
+**DSH（DeepSeek Harness）Windows 插件**：一键清理任务栏窗口——按软件整体关闭、
+关掉残留的空壳控制台，关闭方式等同于对每个窗口按 **Alt+F4**（优雅 `WM_CLOSE`，非强杀），
+并且**绝不碰 DSH 宿主本身、也绝不碰正在计算的 Fluent / MPI**。
 
-## 工作原理
+> English: [README.md](./README.md)
 
-1. 每隔 `scanIntervalSec` 秒（默认 10）用零依赖的 Windows PowerShell 探针
-   （`user32` + `ntdll` P/Invoke）枚举控制台窗口：`CASCADIA_HOSTING_WINDOW_CLASS`
-   （Windows Terminal）、`ConsoleWindowClass`（传统 conhost）、
-   `PseudoConsoleWindow`（ConPTY 伪控制台）。
-2. 按进程归类：优先看**父进程**（父进程是 `WmiPrvSE.exe` → `wmi-detached`，
-   WMI 拉起的脱离任务，无人值守 Fluent 计算正是这样启动的；父进程是
-   `DSH Desktop.exe` → `dsh-host`；父进程已退出 → `orphaned`）。当父链说明
-   不了问题时（Windows Terminal 的窗口归属于 WindowsTerminal 进程，而不是
-   它里面跑的脚本），改看**控制台标题**：脚本启动的控制台标题默认是
-   被启动程序的路径（`...\python.exe`），而交互式手开的控制台是提示符式
-   标题（`Windows PowerShell`）→ 归为 `script-console`。
-3. 每轮采样进程 CPU（累计 CPU 时间差值）。CPU 低于 `cpuThresholdPct`（默认 1%）
-   且持续 `idleThresholdSec`（默认 60 秒）即判定为**用完了**。单次采样的后台
-   CPU 抖动不会重置空闲时钟（`spikeTolerance`，默认 2）。
-4. 在管理范围内的「用完了」窗口执行配置的 `autoAction`（默认 `hide` = `SW_HIDE`，
-   进程继续跑）。`close` 发送 `WM_CLOSE`。前台窗口永不自动处理（`guardForeground`）。
+![面板总览](docs/screenshots/01-panel-overview.png)
 
-父进程 PID 用 `NtQueryInformationProcess` 而非 CIM（`Get-CimInstance Win32_Process`）
-—— 参考机上实测 **39 秒 vs 24 毫秒**（13 个进程）。单次完整探针约 350 毫秒。
+---
+
+## 为什么需要它
+
+Windows 上总会攒下一堆不再需要的窗口：工具留下的空 PowerShell / cmd 空壳、忘了关的终端、
+文档关了但程序还开着的软件。一个个点太麻烦，而粗暴的"全杀掉"脚本又会顺手带走你的宿主或正在跑的 CFD。
+
+这个插件**安全地**帮你关：
+
+* **优雅关闭**（`WM_CLOSE`，正是 Alt+F4 发出的消息），软件能正常保存退出；
+* 支持**按窗口 / 按软件 / 批量**三种粒度，不用挨个点；
+* **永不关闭** DSH 宿主，**永不关闭** Fluent / MPI / ANSYS 求解器进程；
+* 支持关闭**管理员权限窗口**——弹一次 UAC 即可。
+
+## 功能
+
+### 一键清理任务栏窗口（先预演）
+
+`预演清理` 列出将被关闭的窗口（带图标），核对无误再点 `执行清理`。
+**没预演时「执行清理」是禁用的**——不会让你盲着执行破坏性操作。
+
+![预演结果](docs/screenshots/03-preview-result.png)
+
+### 任务栏窗口 · 按软件分组
+
+默认是 **仅图标视图**：每个窗口压成一个 30×30 图标格，**点一下即关闭该窗口**，最省空间。
+切到 **详细视图** 则按软件分组显示完整标题、白名单勾选框、`关掉该软件`（整个软件一次关掉）
+以及每个窗口独立的 `关闭` 按钮。
+
+![详细视图](docs/screenshots/04-detail-view.png)
+
+每次关闭都会先确认：
+
+![确认弹窗](docs/screenshots/02-confirm-dialog.png)
+
+### 空壳控制台清理
+
+没有业务子进程（只剩 `conhost`）的解释器窗口即"空壳"。可以**隐藏**（无损，进程继续跑），
+也可以**真正关闭**——且只针对裸 `cmd` / `powershell` / `pwsh` / `python`。
+
+![控制台页](docs/screenshots/05-console-tab.png)
+
+### 持久化白名单
+
+进程名与窗口标题关键字，命中即永不隐藏、永不关闭。存于
+`~/.dsh/console-sentinel/whitelist.json`，面板里点标签即可增删。
+
+![白名单页](docs/screenshots/06-whitelist-tab.png)
+
+## 安全模型
+
+批量关窗口是不可逆操作，因此叠加了多重硬保护：
+
+| 保护层 | 行为 |
+|---|---|
+| **宿主进程树** | DSH 宿主本身、其全部祖先、以及所有 `dsh` / `electron` / `deepseek` 进程**及其全部后代**永不触碰——关掉其中某个控制台会连带把宿主杀掉。 |
+| **计算保护** | `mpi` / `fluent` / `ansys` / `cx*` / `solver` / `cae` / `launcher` 一律不选。`mpiexec` 的控制台看上去像普通窗口，但它被杀就等于终止正在跑的仿真。 |
+| **只动裸解释器** | 空壳关闭仅限 `cmd` / `powershell` / `pwsh` / `python`。 |
+| **前台与自身** | 当前焦点窗口、插件自身进程一律跳过。 |
+| **白名单** | 你勾选过的软件永久豁免。 |
+
+全链路只用优雅关闭（`WM_CLOSE`），**刻意不提供 `taskkill /F` 强杀**。
+
+## 管理员窗口关不掉怎么办
+
+普通权限进程无法关闭管理员窗口——Windows 的 UIPI 会把消息**静默丢弃**，表现就是"点了没反应"。
+关这类窗口时（任务管理器、录屏工具等），插件会启动**一个**提权助手：你只会看到**一次** UAC，
+它发出同样的 `WM_CLOSE`，并通过临时文件把结果回传（提权子进程的 stdout 是拿不到的）。
+点「否」则什么都不做，插件会**如实告知失败**，而不是假装成功。
 
 ## 安装
 
-```sh
-dsh plugin --profile <name> add dsh-console-sentinel
+```bash
+dsh plugin --profile desktop add dsh-console-sentinel
 ```
 
-Bundle 插件（`dsh.bundle.patch`）：进入 profile bundle 栈，重启后生效。
-仅限 Windows —— patch 行在其他平台 `disabled`，`apply()` 运行时也会再守一次。
+仅支持 Windows。同时声明 `dsh.bundle`（宿主半边）与 `dsh.client`（设置面板半边），
+装好后在 **设置 → 控制台哨兵** 出现，带自定义终端图标。
 
-## 工具（模型可见）
+## 配置
 
-- `console_windows_list` —— 列出所有被追踪的控制台窗口及其空闲状态和来源归类。先用它。
-- `console_window_action` —— 对单个窗口执行 hide / show / minimize / restore / close
-  （用 `hwnd` 或 `pid` 定位）。`hide` 无损；`close` 可能丢失未保存输出。
-  对前台窗口操作需传 `force`。
-- `console_windows_sweep` —— 一次性对所有空闲且在范围内的窗口执行动作
-  （跑完一批 Fluent 任务后清任务栏很好用）。
-- `desktop_windows_cleanup` —— 一键关闭其它程序的窗口（受保护进程与白名单自动跳过）。
-- `sentinel_whitelist` —— 管理豁免白名单（list/add/remove/reset，kind=process|title）。
+`cordis.patch.yml` 默认值：
 
-## 设置面板（DSH 设置页 · 0.3.0+）
-
-插件在 DSH「设置」里注册了一个「控制台哨兵」分区（客户端 bundle `lib/client.js`），
-不用记工具名，点按钮即可：
-
-- **概览**：总窗口 / 空壳 PowerShell / 可见空壳 / 已隐藏 四个计数；「隐藏可见空壳」一键清理。
-- **任务栏窗口清理**：先「预演」列出将被关闭的窗口，再「一键关闭其他窗口」真正执行
-  （前台窗口、系统进程、白名单自动跳过）。
-- **控制台窗口**：逐行显示进程名 / 标题 / hwnd / pid / CPU / 空闲秒数 / 子进程数，每行可隐藏 / 显示 / 关闭。
-- **豁免白名单**：以标签形式管理进程名与窗口标题关键字，改动即时落盘
-  `~/.dsh/console-sentinel/whitelist.json`。
-
-面板通过宿主路由 `/dsh-console-sentinel/*` 取数（客户端 fetch 相对路径，桌面端自动带
-capability header），不使用 iframe。改 `lib/client.js` 后按 **Ctrl+Shift+R** 硬刷新；
-改宿主（`lib/index.js` / `package.json`）需**完全退出 DSH 再启动**。
-
-## 配置（cordis.yml）
-
-| 键 | 默认值 | 含义 |
+| 键 | 默认 | 含义 |
 |---|---|---|
-| `enabled` | `true` | 总开关 |
-| `scanIntervalSec` | `10` | 扫描 + CPU 采样间隔 |
-| `idleThresholdSec` | `60` | 持续低 CPU 多少秒算「用完了」 |
-| `cpuThresholdPct` | `1` | CPU 低于此值算空闲 |
-| `autoAction` | `hide` | `none` \| `hide` \| `close` |
-| `probeTimeoutMs` | `20000` | 探针硬超时 |
-| `spikeTolerance` | `2` | 连续多少次「忙」采样才重置空闲时钟 |
-| `guardForeground` | `true` | 永不自动处理前台窗口 |
-| `scope.wmiDetached` | `true` | 管理 WMI 拉起的脱离控制台 |
-| `scope.dshHost` | `true` | 管理宿主派生的控制台 |
-| `scope.orphaned` | `false` | 管理父进程已退出的控制台 |
-| `scope.scriptConsole` | `true` | 管理标题是脚本可执行文件路径的控制台（Windows Terminal 承载的脚本会话） |
-| `scope.excludeTitles` | `[]` | 标题 substring 黑名单 |
+| `scanIntervalSec` | `10` | 扫描间隔（秒） |
+| `idleThresholdSec` | `60` | 判定空闲所需的秒数 |
+| `cpuThresholdPct` | `1` | 空闲判定的 CPU 下限 |
+| `autoAction` | `none` | 空闲控制台动作：`none` / `hide` / `close` |
+| `emptyConsoleAction` | `hide` | 空壳动作 |
+| `guardForeground` | `true` | 不处理前台窗口 |
+| `cleanup.protectedProcesses` | 见上表 | 桌面清理永不选中 |
+| `whitelist.processes` / `.titles` / `.unprotect` | `[]` | 运行时豁免清单 |
 
-```yaml
-- id: dsh-console-sentinel
-  config:
-    idleThresholdSec: 90
-    scope:
-      excludeTitles:
-        - keep-alive
-```
+## 工具
 
-## 安全性
+宿主侧工具：`console_windows_list`、`console_windows_action`、`console_windows_sweep`、
+`desktop_windows_cleanup`，以及管理豁免清单的 `sentinel_whitelist`。
+命令行：`lib/desktop-cli.mjs list|cleanup`。
 
-`hide` 只调用 `ShowWindow(SW_HIDE)` —— 进程、日志、输出一概不动；
-`console_window_action` 的 `show` 可随时恢复（用 `SW_SHOWNORMAL` ——
-实测 `SW_SHOW` 无法恢复被隐藏的 Windows Terminal 窗口）。`close` 发 `WM_CLOSE`
-（优雅关闭，和你点 X 一样），但可能丢失未保存状态，所以从不是默认动作。
-自动动作绝不触碰：前台窗口、手动打开的控制台（`manual` 来源）、
-标题命中黑名单的窗口。每个动作都发 `console-sentinel/action` 事件并写日志。
+## 许可
 
-## 开发
-
-```
-lib/index.js     Cordis 插件：配置、扫描调度、工具、设置面板 HTTP 路由
-lib/logic.js     纯台账/空闲状态机 + 空壳判定（单测覆盖）
-lib/probe.js     内嵌 PowerShell 探针（含父子进程表）+ 窗口动作
-lib/desktop.js   任务栏窗口清理（受保护进程/白名单/前台守卫）
-lib/whitelist.js 持久化豁免白名单（~/.dsh/console-sentinel/whitelist.json）
-lib/client.js    设置面板客户端 bundle（__ModuleLoader__，settings.section）
-tests/           仅 node 的回归测试，不需要真实 Windows
-```
-
-`node --test tests/` —— logic / desktop / tool-output / client 四组断言；
-client 组用 DOM stub 评估真实 bundle，覆盖注册契约与首屏渲染。
-
-`node tests/logic.test.mjs` —— 24 项断言，覆盖来源归类、空闲累积、
-忙碌脉冲重置、范围守卫、台账 GC、排序。
-
-MIT License。
+MIT

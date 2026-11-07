@@ -86,9 +86,14 @@ function loadBundle(h) {
   const queue = []
   const fakeSetTimeout = (fn) => { queue.push(fn); return queue.length }
   const requireFn = (name) => { if (name === 'react') return { default: h.React }; throw new Error('no module ' + name) }
-  const fn = new Function('window', 'document', 'fetch', 'setTimeout', 'console', code)
-  fn(win, h.doc, h.fetch, fakeSetTimeout, console)
-  return { def: win.__def, queue }
+  // The panel arms a setInterval for auto-refresh; without a stub Node would
+  // never exit. Record it instead of scheduling.
+  const intervals = []
+  const fakeSetInterval = (fn, ms) => { intervals.push({ fn, ms }); return intervals.length }
+  const fakeClearInterval = (id) => { if (id) intervals[id - 1] = null }
+  const fn = new Function('window', 'document', 'fetch', 'setTimeout', 'setInterval', 'clearInterval', 'console', code)
+  fn(win, h.doc, h.fetch, fakeSetTimeout, fakeSetInterval, fakeClearInterval, console)
+  return { def: win.__def, queue, intervals }
 }
 
 const tick = () => new Promise((r) => setImmediate(r))
@@ -97,6 +102,24 @@ test('bundle id equals package name', () => {
   const h = makeHarness()
   const { def } = loadBundle(h)
   assert.equal(def.id, 'dsh-console-sentinel')
+})
+
+test('settings.section.icon id MUST equal settings.section id (else host keeps the default gear)', () => {
+  const h = makeHarness()
+  const { def } = loadBundle(h)
+  const exported = def.factory((n) => ({ default: h.React }))
+  const regs = []
+  exported.apply({
+    slots: {
+      inject(name, cb) { cb() },
+      register(cfg, comp) { regs.push({ cfg, comp }); return {} }
+    }
+  })
+  const section = regs.find((r) => r.cfg.name === 'settings.section')
+  const icon = regs.find((r) => r.cfg.name === 'settings.section.icon')
+  assert.ok(section, 'settings.section registered')
+  assert.ok(icon, 'settings.section.icon registered (without it the host shows the default gear)')
+  assert.equal(icon.cfg.id, section.cfg.id, 'icon id must EXACTLY equal the section id')
 })
 
 test('exports.inject is a plain array including slots', () => {
@@ -160,3 +183,28 @@ test('card button issues host route call', async () => {
   await tick(); await tick()
   assert.ok(h.calls.some((u) => u.includes('/hide-empty')))
 })
+
+test('关闭空壳窗口 button issues /close-empty (not hide)', async () => {  const h = makeHarness()
+  const { def, queue } = loadBundle(h)
+  const exported = def.factory((n) => ({ default: h.React }))
+  let registered = null
+  exported.apply({ slots: { inject(n, cb) { if (n === 'settings.section') cb() }, register(c, comp) { registered = { cfg: c, comp }; return {} } } })
+  const root = h.mkEl('div')
+  h.mount(registered.comp(), root)
+  while (queue.length) queue.shift()()
+  await tick(); await tick()
+  const textOf = (n) => n._text || (n.children || []).map((c) => c.textContent || '').join('')
+  let closeBtn = null
+  ;(function walk(n) {
+    if (!n || !n.children) return
+    for (const c of n.children) {
+      if (c.tagName === 'button' && textOf(c).includes('关闭空壳窗口')) closeBtn = c
+      walk(c)
+    }
+  })(root)
+  assert.ok(closeBtn, '关闭空壳窗口 button should exist')
+  closeBtn._onClick({ preventDefault() {} })
+  await tick(); await tick()
+  assert.ok(h.calls.some((u) => u.includes('/close-empty')), 'close-empty route called')
+})
+
