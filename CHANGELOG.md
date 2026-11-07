@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.1 (2026-11-08) — 修复客户端重复注册报错 + 元数据一致性
+
+发布后五方核验发现的问题，逐条修复。
+
+### 修复
+1. **客户端 bundle 重复注册**（`client-modules: duplicate factory registration for "dsh-console-sentinel"`）：
+   宿主会通过**两条路径**投递同一个 bundle —— 客户端模块图 + 插件自己的 `/client.bundle.js` 回退路由，
+   两次 `__ModuleLoader__.load` 同 id → 加载器抛错并每次刷新都记 error。
+   原 `__DCS_APPLIED__` 守卫在 `apply()` 里，**太晚**。改为在 **load 层**加 `window.__DCS_MODULE_LOADED__` 守卫。
+2. **`files` 白名单 3 条死条目**：`README.es.md/.pt.md/.hi.md` 与实际文件名（连字符版 `README-es.md` 等）不符，
+   已改为真实文件名。
+3. **本地源码 `package.json` 与 GitHub/npm 不一致**：本地仍是 0.3.0 时代的 description、且 `files` 缺
+   `docs/screenshots/*.png`（**若从本地重新发布，6 张截图会全部掉出包**）。已同步为与发布版**字节一致**，
+   并把 `docs/screenshots/` 六张图补进本地源码目录。
+
+### 生效方式
+含 `lib/client.js`（客户端）→ **Ctrl+Shift+R 硬刷新**；`package.json` 变更随 npm 1.0.1 生效。
 ## 1.0.0 (2026-11-08) — 大版本：一键清理 + 按软件关闭 + 提权关闭 + 全新面板 UI
 
 首个稳定大版本。把此前只在对话里能用的能力全部搬进设置面板，并围绕「安全地批量关窗」重建了 UI 与保护模型。

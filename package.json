@@ -1,6 +1,6 @@
 {
   "name": "dsh-console-sentinel",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "DSH console sentinel for Windows — one-click cleanup of taskbar windows and empty console shells. Graceful WM_CLOSE (= Alt+F4) per window or whole app, UAC-elevated close for admin apps, icon-grid and detail views, preview-before-execute, persistent whitelist, and hard protection for the DSH host and Fluent/MPI solvers.",
   "license": "MIT",
   "repository": {
@@ -28,9 +28,9 @@
     "README.md",
     "README.zh.md",
     "README-zh.md",
-    "README.es.md",
-    "README.pt.md",
-    "README.hi.md",
+    "README-es.md",
+    "README-pt.md",
+    "README-hi.md",
     "CHANGELOG.md",
     "icon.svg",
     "docs/screenshots/*.png",
