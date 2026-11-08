@@ -1,5 +1,10 @@
 # dsh-console-sentinel
 
+> **功能描述**：桌面控制台哨兵：扫描所有控制台窗口，标出哪些已空闲或跑完，一键关闭非白名单窗口，关之前先干跑预览再确认。白名单按进程名或窗口标题子串逐条添加，宿主进程默认受保护。适配 DSH 内核 0.2.2-rc.1。
+>
+> **English**: Desktop console watchdog: scans every console window, marks which ones are idle or finished, and closes the non-whitelisted ones in one click, with a dry-run preview and a confirm step before anything closes. Whitelist entries are one row each by process image name or window-title substring, and shell hosts are protected by default. Adapts DSH kernel 0.2.2-rc.1.
+
+
 [![npm](https://img.shields.io/npm/v/dsh-console-sentinel.svg)](https://www.npmjs.com/package/dsh-console-sentinel)
 [![license](https://img.shields.io/npm/l/dsh-console-sentinel.svg)](./LICENSE)
 ![platform](https://img.shields.io/badge/platform-Windows%20only-0078D4)
