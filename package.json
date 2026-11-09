@@ -34,7 +34,8 @@
     "CHANGELOG.md",
     "icon.svg",
     "docs/screenshots/*.png",
-    "locale/*.json"
+    "locale/*.json",
+    "screenshots.json"
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
