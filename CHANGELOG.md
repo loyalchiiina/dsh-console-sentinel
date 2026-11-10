@@ -1,5 +1,84 @@
 # Changelog
 
+## 1.1.0 (2026-11-10) — 「系统控制台窗口」+「DSH 侧边栏 · 当前面板」双折叠卡片 + 资源管理器文件夹窗口可关
+
+减少两类堆积：任务栏里的**系统控制台窗口**，和右侧边栏里**打开没关闭的面板**（后者是卡顿主因）。
+**客户端与宿主都有改动**：`lib/client.js` 走 **Ctrl+Shift+R 硬刷新**；
+`lib/index.js` / `lib/logic.js` 走**彻底退出 DSH 再启动**（宿主是 Node 进程，无热重载）。
+
+### 新增 / 变更（客户端 `lib/client.js`）
+1. **「系统控制台窗口（N 可关 · M 非DSH侧边栏 · MCP n 勿关）」折叠卡片**：标题行自报三个数——
+   可关闭数 / 非 DSH 侧边栏总数 / MCP 服务数；**默认折叠**，点标题行整块展开；标题行右侧
+   「全部关闭」逐窗 `WM_CLOSE` 并显示 2px 关闭进度条；每行 `隐藏` / `关闭` 行内操作。
+   MCP 服务（进程名匹配 `mcp` / `agent-bridge` / `ansys-bridge`）渲染红标「MCP服务·勿关」，
+   **不渲染**关闭/隐藏按钮，「全部关闭」自动跳过——它们是 DSH 宿主服务，关掉会把工具链一起带走。
+2. **界面紧凑化**：四个操作按钮（预演 / 执行清理 / 全关其他 / 刷新）收进同一行；窗口明细默认折叠；
+   **图标网格视图**里可关窗口右上角加**红色小 X 角标**（tooltip「关闭此窗口」，点一下即关，
+   不必进详细视图）。
+
+> **⚠️ 1.1.0 修正（2026-11-10）**：初版把 `openTabs` 全量（含所有历史会话元数据残留）当
+> 「已打开面板」列出，用户实测数字虚高、逐条关闭不生效。查 DSH 宿主源码
+> （app.asar `sidebar-right.js` `SidebarTabInventory` / `closeIn`）确认：**宿主只对 mounted
+> 当前会话的 tab 关闭才真正生效**；历史会话记录是 localStorage 布局残留、无公开清理入口。
+> 已改为——卡片**只列当前会话(mounted)正在看的面板**，`close`/`closeAll` 只作用于该集合，
+> 历史残留不再展示、不可关。详见下「修正说明」。
+
+### 新增（DSH 侧边栏卡片 · 宿主 API）
+3. **设置面板顶部「DSH 侧边栏 · 当前面板（N）」折叠卡片**：只实时枚举宿主右侧边栏**当前会话正在看的
+   面板**（文件/终端/Git/预览等），带计数、默认折叠、「关闭当前面板」固定在标题行右侧（折叠态也可一键关）。
+   数据源是宿主原生 API `ctx.sidebarRight.openTabs`
+   （`Observable`，`getSnapshot()` 取快照 + `subscribe` 实时同步），过滤 `sessionId === mounted`。
+   **不是** Windows 系统窗口，也不是任务栏窗口。
+4. **每个面板一行**：kind 中文名（文件/终端/Git…，未知回退原文）+ tab 短标识 + 单面板「关闭」按钮。
+5. **「全部关闭」（当前面板）**：遍历当前会话 `cur`，逐个 `close(tabId)`（同步 void），完成后自动刷新。
+6. 原「未关闭窗口」横幅保留为系统控制台辅助视图（见下），与新的 DSH 侧栏面板卡并列。
+
+### 修复（宿主 `lib/index.js` / `lib/logic.js`）
+7. **`folderWindows` 作用域 bug**：`registerHttpUi(...)` 之前按值传 `folderWindows` 数组快照，
+   宿主侧后续 `folderWindows = [...]` 重新赋值后，HTTP 路由仍指向**旧数组**→ 新增/刷新出来的
+   文件夹窗口在 `/status`、`/close` 里看不见。改为传 **getter `() => folderWindows`**，
+   HTTP 层每次现取，作用域与重启逻辑脱钩。
+   > 判据（可回归）：关掉资源管理器若干文件夹窗口 → 新开两个文件夹 → `/status` 里 `folderWindows`
+   > 计数随之变化；改前该计数冻结在启动那一刻。
+8. **资源管理器文件夹窗口可关**（此前一律拒绝）：`CabinetWClass`（Win10/11）/ `ExploreWClass`
+   （旧版 NT）现在可作为独立窗口 **WM_CLOSE** 关闭，**不 kill `explorer.exe`**——
+   桌面、任务栏、开始菜单全部不受影响（文件夹窗口与桌面共用 explorer pid，只能按 hwnd 关）。
+   自动空壳扫描永不含文件夹窗口，用户手动单关才生效。
+9. **桌面壳红线 7 类**：`Progman` / `WorkerW` / `Shell_TrayWnd` / `Shell_SecondaryTrayWnd` /
+   `DV2ControlHost` / `MsgrimeWindowClass` / `SysShadow` 显式列入 `DESKTOP_SHELL_CLASSES` 拒绝集，
+   `close` 路径返回 `desktop-shell` 原因码而不是静默关掉——这几类关掉 = 桌面/任务栏/输入法消失。
+
+### 文档 / 截图
+10. **下架 6 张旧截图**（`01-panel-overview` / `02-confirm-dialog` / `03-preview-result` /
+    `04-detail-view` / `05-console-tab` / `06-whitelist-tab`），**替换为当前 UI 的 4 张**：
+    `panel-taskbar`（图标视图 + 红X角标 + 双卡）/ `panel-whitelist`（白名单页 + 双卡）/
+    `panel-console`（控制台列表 + 空壳/已隐藏标记）/ `panel-detail-view`（详细视图 + 白名单/系统保护/关掉该软件）。
+    `screenshots.json` 同步改为这 4 条**相对路径数组**（第 1 张为整体界面，市场卡片只显示前 3 张）。
+11. README 顶部功能描述（中文在前、英文在后）按实际能力重写：双卡、一键关闭、MCP 勿关、
+    默认折叠、红X角标、文件夹窗口可关；图片引用全部改到新文件名，不再引用已删除的旧图。
+
+### 实现通道（关键）
+DSH 对 client bundle **不开放侧边栏 DOM 注入**——renderer 摸不到宿主侧栏 chrome DOM
+（better-sidebar 源码全库 grep：querySelector/MutationObserver 只对插件自己的 portal 内容）。
+**必须走宿主 API** `ctx.sidebarRight`（controller）+ `ctx.inject(['sidebarRight','sidebarRightTabs'], cb)`
+依赖注入等 service 就绪；`openTabs` 是 `Observable<OpenTab[]>`, `OpenTab={sessionId,tabId,kind}`。
+无原生 `closeAll` → `close()` 只对 mounted 会话生效。面板记录只有 `kind` 无标题 → 展示层自建 kind→中文名映射。
+该 API 需 DSH **0.1.7+**（`mounted` 字段 0.1.7 引入）；宿主旧版自动降级为「不支持」提示，不报错。
+
+### 修正说明（为何不能列全部历史面板）
+- `openTabs` 是**跨会话只读元数据注册表**（宿主注释「independent of visible seats」），把每个
+  历史会话 localStorage 布局里被打开过的 tab 全塞进来 → 数字虚高（曾见 203）。
+- 宿主 `closeIn(sessionId, tabId)` 对未 adopt 历史会话 **`if (actions===void 0) return;` 静默空转**；
+  `close(tabId)` 对无 mounted 会话抛异常。**没有公开的批量清理历史接口**（仅删会话时内部 `forget`）。
+- 结论：列出并让用户逐条关历史残留 = 误导（怎么点都不掉）。**只列 mounted 当前会话**才是
+  右侧栏真实在显示的、且关闭真正生效的集合。
+
+### 生效方式（两处，别只做一半）
+- `lib/client.js`（双卡、紧凑化、红X角标）→ **Ctrl+Shift+R 硬刷新**（Ctrl+R 只从内存缓存重载、不重新读盘）。
+- `lib/index.js` / `lib/logic.js`（`folderWindows` getter 修复、文件夹窗口可关、桌面壳红线）→
+  **彻底退出 DSH 客户端再启动**（宿主是 Node 进程，无热重载）。
+- 只有客户端改动时宿主不必重启；但 1.1.0 同时含宿主改动，**必须两者都做**，否则文件夹窗口仍不可关。
+
 ## 1.0.1 (2026-11-08) — 修复客户端重复注册报错 + 元数据一致性
 
 发布后五方核验发现的问题，逐条修复。

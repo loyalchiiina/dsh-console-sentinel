@@ -5,12 +5,12 @@
 ![platform](https://img.shields.io/badge/platform-Windows%20only-0078D4)
 
 **DSH（DeepSeek Harness）Windows 插件**：一键清理任务栏窗口——按软件整体关闭、
-关掉残留的空壳控制台，关闭方式等同于对每个窗口按 **Alt+F4**（优雅 `WM_CLOSE`，非强杀），
-并且**绝不碰 DSH 宿主本身、也绝不碰正在计算的 Fluent / MPI**。
+关掉残留的空壳控制台、关掉 DSH 右侧边栏还开着没关的面板，关闭方式等同于对每个窗口按
+**Alt+F4**（优雅 `WM_CLOSE`，非强杀），并且**绝不碰 DSH 宿主本身、MCP 宿主服务、也绝不碰正在计算的 Fluent / MPI**。
 
 > English: [README.md](./README.md)
 
-![面板总览](docs/screenshots/01-panel-overview.png)
+![面板总览](docs/screenshots/panel-taskbar.png)
 
 ---
 
@@ -28,38 +28,42 @@ Windows 上总会攒下一堆不再需要的窗口：工具留下的空 PowerShe
 
 ## 功能
 
+### 顶部两张折叠卡片（默认折叠）
+
+设置面板顶部并列两张卡片，**默认折叠**（界面更紧凑），点标题行任意位置展开；每张卡片的「全部关闭」都固定在标题行，**折叠态也能一键关**：
+
+* **系统控制台窗口（N 可关 · M 非DSH侧边栏 · MCP n 勿关）**：标题行自报三个数——可关闭数 / 非 DSH 侧边栏总数 / MCP 服务数。每行 `隐藏`（无损）或 `关闭`（`WM_CLOSE`）；MCP 服务（进程名匹配 `mcp` / `agent-bridge` / `ansys-bridge`）标红「MCP服务·勿关」，**不渲染**关闭/隐藏按钮，「全部关闭」自动跳过——它们是 DSH 宿主服务，关掉会把工具链一起带走。批量关闭时标题下方有 2px 进度条。
+* **DSH 侧边栏 · 当前面板（N）**：只列**当前会话已 mounted** 的右侧栏面板（文件 / 终端 / Git / 预览…），每行带 kind 中文名 + tab 标识 + `关闭`；`关闭当前面板` 在标题行，折叠态也可一键关。数据来自宿主原生 API `ctx.sidebarRight.openTabs`；历史会话残留不展示（宿主对未 adopt 的历史会话 `closeIn` 是静默空转，列出来也关不掉）。
+
 ### 一键清理任务栏窗口（先预演）
 
 `预演清理` 列出将被关闭的窗口（带图标），核对无误再点 `执行清理`。
-**没预演时「执行清理」是禁用的**——不会让你盲着执行破坏性操作。
-
-![预演结果](docs/screenshots/03-preview-result.png)
+**没预演时「执行清理」是禁用的**——不会让你盲着执行破坏性操作。最后一次确认是系统 yes/no 提示。
 
 ### 任务栏窗口 · 按软件分组
 
-默认是 **仅图标视图**：每个窗口压成一个 30×30 图标格，**点一下即关闭该窗口**，最省空间。
-切到 **详细视图** 则按软件分组显示完整标题、白名单勾选框、`关掉该软件`（整个软件一次关掉）
-以及每个窗口独立的 `关闭` 按钮。
+默认是 **仅图标视图**：每个窗口压成一个 30×30 图标格，可关闭的窗口右上角带**红色小 X 角标**（tooltip「关闭此窗口」），点一下即关闭该窗口，不必进详细视图。
+切到 **详细视图** 则按软件分组显示完整标题、白名单勾选框、`系统保护` / `管理员` 标记、`关掉该软件`（整个软件一次关掉）以及每个窗口独立的 `关闭` 按钮。
 
-![详细视图](docs/screenshots/04-detail-view.png)
+![详细视图](docs/screenshots/panel-detail-view.png)
 
-每次关闭都会先确认：
+### 资源管理器文件夹窗口
 
-![确认弹窗](docs/screenshots/02-confirm-dialog.png)
+文件夹窗口（`CabinetWClass` / `ExploreWClass`）现在可单独关闭：按 **hwnd** 发 `WM_CLOSE`，**不 kill `explorer.exe`**——桌面、任务栏、开始菜单都不受影响。桌面壳 7 类（`Progman` / `WorkerW` / `Shell_TrayWnd` / `Shell_SecondaryTrayWnd` / `DV2ControlHost` / `MsgrimeWindowClass` / `SysShadow`）硬拒绝，返回 `desktop-shell` 原因码；自动空壳扫描永不含文件夹窗口。
 
 ### 空壳控制台清理
 
 没有业务子进程（只剩 `conhost`）的解释器窗口即"空壳"。可以**隐藏**（无损，进程继续跑），
-也可以**真正关闭**——且只针对裸 `cmd` / `powershell` / `pwsh` / `python`。
+也可以**真正关闭**——且只针对裸 `cmd` / `powershell` / `pwsh` / `python`。已隐藏的空壳仍留在列表里并带 `已隐藏` 标记，不会无声消失。
 
-![控制台页](docs/screenshots/05-console-tab.png)
+![控制台页](docs/screenshots/panel-console.png)
 
 ### 持久化白名单
 
 进程名与窗口标题关键字，命中即永不隐藏、永不关闭。存于
-`~/.dsh/console-sentinel/whitelist.json`，面板里点标签即可增删。
+`~/.dsh/console-sentinel/whitelist.json`，面板里点标签即可增删。白名单页同时带 `系统保护` 展示，逐条标明这个插件自己在保护哪些东西。
 
-![白名单页](docs/screenshots/06-whitelist-tab.png)
+![白名单页](docs/screenshots/panel-whitelist.png)
 
 ## 安全模型
 
@@ -68,7 +72,10 @@ Windows 上总会攒下一堆不再需要的窗口：工具留下的空 PowerShe
 | 保护层 | 行为 |
 |---|---|
 | **宿主进程树** | DSH 宿主本身、其全部祖先、以及所有 `dsh` / `electron` / `deepseek` 进程**及其全部后代**永不触碰——关掉其中某个控制台会连带把宿主杀掉。 |
+| **MCP 宿主服务** | 进程名匹配 `mcp` / `agent-bridge` / `ansys-bridge` 的控制台标红「MCP服务·勿关」：无关闭/隐藏按钮，「全部关闭」跳过。 |
 | **计算保护** | `mpi` / `fluent` / `ansys` / `cx*` / `solver` / `cae` / `launcher` 一律不选。`mpiexec` 的控制台看上去像普通窗口，但它被杀就等于终止正在跑的仿真。 |
+| **桌面壳红线（7 类）** | `Progman` / `WorkerW` / `Shell_TrayWnd` / `Shell_SecondaryTrayWnd` / `DV2ControlHost` / `MsgrimeWindowClass` / `SysShadow` 拒绝关闭并返回 `desktop-shell`——关掉 = 桌面 / 任务栏 / 输入法消失。 |
+| **explorer 保活** | 文件夹窗口按 hwnd 关，`explorer.exe` 永不 kill。 |
 | **只动裸解释器** | 空壳关闭仅限 `cmd` / `powershell` / `pwsh` / `python`。 |
 | **前台与自身** | 当前焦点窗口、插件自身进程一律跳过。 |
 | **白名单** | 你勾选过的软件永久豁免。 |
