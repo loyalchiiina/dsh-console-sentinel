@@ -58,6 +58,28 @@ Windows 上总会攒下一堆不再需要的窗口：工具留下的空 PowerShe
 
 ![控制台页](docs/screenshots/panel-console.png)
 
+### 溯源：每个窗口是谁拉起来的
+
+每个控制台窗口除了 `src=`（来源类型），再加一行**溯源**：
+
+`← WmiPrvSE.exe(10384) ← svchost.exe(4144) · 脚本 monitor_writer_xxx.ps1 · 建 11-06 10:47:36`
+
+* **父进程链**：最多 6 层，从自身往上（hover 看全链）。看到 `← WmiPrvSE.exe` 就知道它是被 WMI 的
+  `Win32_Process.Create` 拉起来的——后台脚本/服务端常走这条路。
+* **脚本**：从命令行里认出 `-File <x>.ps1` 或 `盘符:\...\.(ps1|bat|cmd|py|vbs|js)`，行上只给**文件名**，
+  hover 看**绝对路径**与**命令行全文**（超 600 字符截断）。
+* **创建时间**：进程启动时刻，用来判断「它是不是从早上 10:47 一直活到现在」。
+
+**能力边界**：`src=wmi-detached` 只能证明「父亲是 WmiPrvSE」，**「谁调用了 WMI」不可回溯**——
+`Microsoft-Windows-WMI-Activity/Operational` 里那条带 `ClientProcessId` 的 `Win32_Process::Create`
+会被高频查询冲掉。要定位始作俑者，看**命令行里的脚本路径**（那是调用方留下的指纹）。
+
+### 父：「红字」标识 + 一键清理孤儿窗口
+
+每个窗口在进程名旁多一个**红字 chip**：有父进程 → `父：svchost.exe(4144)`；父进程已退出（孤儿）→ `父：已退出`（hover 看父进程命令行全文）。
+
+操作栏「清理孤儿窗口」按钮 = 一键监测并关闭「父进程已退出、但自身还在」的控制台，**先弹确认清单再关**。安全模式：只关**无业务子进程 + 非计算类**的裸解释器孤儿（`cmd`/`powershell`/`pwsh`/`python`）；`mpiexec` / `fluent` / `fl2610` / `cx2610` / `ansys` / `node` 等计算类**一律不碰**——正在算的 Fluent 其 mpiexec 也可能父已退出，绝不会被误关。
+
 ### 持久化白名单
 
 进程名与窗口标题关键字，命中即永不隐藏、永不关闭。存于

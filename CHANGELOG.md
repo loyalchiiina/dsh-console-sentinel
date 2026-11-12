@@ -1,3 +1,67 @@
+## 1.3.1 (2026-11-13) — 任务栏图标视图：图标加大一档 + 空白图标兜底
+
+### 新增 / 修复
+1. **图标大一号**（`lib/client.js`）：仅图标视图的方块 30→36px、圆角 8→10px、进程图标 20→24px、右上角关闭 × 14→16px、间距 6→8px。
+   图标尺寸由方块按 0.66 派生（`iconImg(icon,label,size)` 单一 size 参数），不是散落的写死像素。
+2. **空白图标不再空白**（`lib/client.js` `iconImg` fallback）：取不到 .exe 图标时不再留灰块，改显示进程名首字母（hover 显示完整进程名）。
+3. **宿主侧补图标**（`lib/desktop.js`）：`$pathMap` 原来只靠 `Process.Path`，对 UWP / 提权 / 跨位宽进程会抛异常 → 图标空。
+   新增 `Win32_Process.ExecutablePath` 兜底回填缺失的 pid（不覆盖已取到的路径），从源头提高图标命中率。
+
+### 生效
+- client.js → Ctrl+Shift+R；desktop.js（宿主）→ 彻底退出 DSH 再启动。两者都改，必须彻底退出重启。
+
+## 1.3.0 (2026-11-13) — 每个窗口红字「父：」标识 + 一键清理孤儿窗口（安全模式）
+
+「父进程关了、子进程还在空跑」这件事现在能一眼看出来、并一键收掉，同时不误伤正在算的任务。
+
+### 新增
+1. **父进程红字 chip**（`lib/client.js` `parentChip(w)`，主列表 + 「当前打开窗口」卡片两处）：
+   贴在进程名旁边 —— 有父 → 红字 `父：svchost.exe(4144)`；父已退出（孤儿）→ 红字 `父：已退出`。
+   hover 显示父进程名 + 完整命令行，或「父进程已退出，当前是孤儿进程」。10.5px + 6px 圆角 + `nowrap`，320px 不折行。
+2. **一键清理孤儿窗口**（客户端 `closeOrphans()` + 操作栏「清理孤儿窗口」按钮 + 宿主 `/close-orphans` 路由）：
+   两段式 —— 先 `dryRun` 出候选清单并在 `confirm` 里逐条列出，确认后才关闭。
+   **安全模式判据**：`source === 'orphaned'` 且 `childCount === 0` 且 `isSafeClosableShell`（只 cmd/powershell/pwsh/python
+   裸解释器）且不在宿主保护集；`mpiexec / fluent / fl2610 / cx2610 / ansys / node` 等计算类一律跳过、绝不中断正在算的任务。
+
+### 生效
+- `lib/client.js`（客户端 bundle）→ **Ctrl+Shift+R 硬刷新**；
+- `lib/index.js`（宿主路由）+ `package.json`（版本）→ **彻底退出 DSH 再启动**（宿主是 Node 进程，无热重载）。
+- 两者都有改动，**务必彻底退出 DSH 再启动**后才会全部生效。
+
+### 已知边界
+- 「孤儿」只判定「父进程已退出」，不代表它一定在空跑：正在算的 Fluent 其 mpiexec 也可能父已退出。
+  因此一键清理只动「无业务子进程 + 非计算类」的裸解释器孤儿，计算类永远留给人工判断。
+
+## 1.2.0 (2026-11-12) — 每个控制台窗口新增「溯源」行：父进程链 / 启动命令行 / 脚本路径 / 创建时间
+
+定位「这类黑窗到底是谁拉起来的」从**猜**变成**看**。以前只能看到来源类型（`src=wmi-detached`
+只说明「父亲是 WmiPrvSE」，不知道谁调用了 WMI），现在每行直接给出上报链条。
+
+### 新增
+1. **溯源行**（客户端 `lib/client.js` 主列表 + 「当前打开窗口」卡片）：meta 行下面多一行 11px 等宽小字，
+   形如 `← WmiPrvSE.exe(10384) ← svchost.exe(4144) · 脚本 monitor_writer_xxx.ps1 · 建 11-06 10:47:36`；
+   完整信息（父链全 6 层 / 脚本绝对路径 / 创建时间 / **命令行全文**）在 hover 提示里。
+   单行 `nowrap` + 省略号，320px 窄宽不折行。
+2. **宿主采集**（`lib/probe.js`）：一次全表 `Get-CimInstance Win32_Process`（ProcessId / ParentProcessId /
+   Name / CommandLine / CreationDate）建哈希，逐目标 PID 现算 6 层父链与脚本提取；失败整体降级为空，
+   探测主链路（窗口枚举 + 隐藏状态）不受影响。
+3. **数据管道**（`lib/logic.js`）：新增导出 `normalizeTrace()`，record 增
+   `trace: {cmd, created, parent, chain[], script}`，`snapshot()` 透传给客户端；缺字段一律降级空值。
+
+### 生效
+- `lib/client.js` / `lib/logic.js` / `lib/probe.js` 全部改动 → **彻底退出 DSH 再启动**
+  （宿主是 Node 进程，无热重载；客户端 bundle 的 rev 由文件 mtime/size 推导，Ctrl+Shift+R 不足以换掉旧 rev 表）。
+
+### 已知边界
+- 「谁调用了 WMI」仍不可回溯：`Microsoft-Windows-WMI-Activity/Operational` 里 `Win32_Process::Create`
+  记录会被高频 ExecQuery 冲掉（实测最近 800 条已无 11-06 那条）。溯源只能到**父进程 = WmiPrvSE** 为止，
+  再往上是哪个脚本调用的，只能靠命令行里的 `-File <脚本>` 推断。
+
+## 1.1.1 (2026-11-12) — 页头新增「⟳ 检查更新」按钮
+
+- 页头「刷新」左侧新增 ⟳：查 npm 最新版 → 有新版变蓝「更新到 vX」→ 再点一键安装到 desktop profile（装完提示彻底退出 DSH）。
+- 复用技能浏览器的全局更新委托（window.__dshUpdClick），与其它插件行为一致。
+- 纯客户端改动：**Ctrl+Shift+R 硬刷新**即可生效。
 # Changelog
 
 ## 1.1.0 (2026-11-10) — 「系统控制台窗口」+「DSH 侧边栏 · 当前面板」双折叠卡片 + 资源管理器文件夹窗口可关

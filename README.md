@@ -85,6 +85,32 @@ A shell with no working child process (just `conhost`) is an "empty shell". Hide
 
 ![Console tab](docs/screenshots/panel-console.png)
 
+### Provenance: who spawned this console
+
+Every console row now carries a second line besides `src=` (source type):
+
+`← WmiPrvSE.exe(10384) ← svchost.exe(4144) · script monitor_writer_xxx.ps1 · since 11-06 10:47:36`
+
+* **Parent chain** — up to 6 levels upward from the window's own process (full chain on hover).
+  Seeing `← WmiPrvSE.exe` means it was created through WMI's `Win32_Process.Create`, the usual path for
+  background/boot-time scripts. Seeing `← explorer.exe` means a human double-clicked it.
+* **Script** — recognised from the command line (`-File <x>.ps1` or a drive-absolute
+  `.(ps1|bat|cmd|py|vbs|js)` path). The row shows the file name; hover shows the absolute path and the
+  **full command line** (truncated past 600 chars).
+* **Start time** — when the process was created, so "is this the same one that has been running since
+  10:47" becomes a fact instead of a guess.
+
+**Boundary:** `src=wmi-detached` only proves the parent is WmiPrvSE; **"which caller invoked WMI" is not
+retrievable** — the `Microsoft-Windows-WMI-Activity/Operational` record carrying `ClientProcessId` gets
+flushed by high-frequency query traffic. To find the culprit, read the **script path in the command line**:
+that is the fingerprint the caller leaves behind.
+
+### Red 父：chips + one-click orphan cleanup
+
+Every row now also shows a **red parent chip** next to the process name: `父：svchost.exe(4144)` when the parent is alive, or `父：已退出` for an orphan whose parent already exited (hover for the parent's full command line).
+
+The **Clean orphan windows** button in the action bar monitors and closes console windows whose parent has exited but which kept running — **a confirmation list is always shown before anything is closed**. Safe mode: only bare interpreters (`cmd`/`powershell`/`pwsh`/`python`) with **no working child process** and **not compute-related** are touched; `mpiexec` / `fluent` / `fl2610` / `cx2610` / `ansys` / `node` are **never** closed — a running Fluent's mpiexec can also have an exited parent, and it will not be killed by mistake.
+
 ### Persistent whitelist
 
 Programs and window-title keywords that must never be hidden or closed. Stored in
