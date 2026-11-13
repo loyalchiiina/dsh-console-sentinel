@@ -4,6 +4,10 @@
 >
 > **English**: Desktop console watchdog: scans every console window, marks which ones are idle or finished, and closes the non-whitelisted ones in one click, with a dry-run preview and a confirm step before anything closes. Whitelist entries are one row each by process image name or window-title substring, and shell hosts are protected by default. Since v1.1.0 the settings panel opens with two collapsible cards — "System console windows (N closable · M non-DSH-sidebar · MCP n protected)" and "DSH sidebar · current panels (N)" — each expandable for per-window closing or closable in one click from its title row; MCP host services are flagged protected with no close button; closable windows in the icon grid carry a red X badge; File Explorer folder windows can be closed individually without killing explorer.exe, so the desktop and taskbar stay up. Adapts DSH kernel 0.2.2-rc.1.
 
+> ⚠️ **版本说明（2026-11-13）**：1.3.2 及更早版本的「自动隐藏」在失败时会**每 10 秒写一条日志**、`reason` 恒为 `unknown`（本机实测一小时 208 条）。1.3.4 起：probe 按证据给出 `stale-handle` / `still-visible` / `unknown-state`，失败记账并指数退避（封顶 10 分钟），连续 3 次进 30 分钟冷却，日志改为首次 `warn`（带 pid/标题/窗口类/是否提权）+ 每 10 分钟或每 60 次一条汇总。1.3.5 另修 `console_windows_list` 工具：输出 schema 少了 `trace` 字段，导致每次调用都被宿主按 `additionalProperties: false` 拒收。
+>
+> **Status (2026-11-13)**: On 1.3.2 and earlier, auto-hide wrote one log line every 10 s for the same window with `reason` hard-coded to `unknown` (208 entries in an hour on this machine). Since 1.3.4 the probe classifies failures as `stale-handle` / `still-visible` / `unknown-state`, tracks them with exponential backoff (capped at 10 min), enters a 30-minute cooldown after three consecutive failures, and logs one `warn` with full identity plus periodic summaries. 1.3.5 also fixes `console_windows_list`, whose output schema omitted `trace` and made every call fail host-side validation.
+
 
 [![npm](https://img.shields.io/npm/v/dsh-console-sentinel.svg)](https://www.npmjs.com/package/dsh-console-sentinel)
 [![license](https://img.shields.io/npm/l/dsh-console-sentinel.svg)](./LICENSE)

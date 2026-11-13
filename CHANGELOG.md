@@ -1,3 +1,14 @@
+## 1.3.5 (2026-11-13)
+
+### 修复：`console_windows_list` 工具每次调用都失败
+
+- 症状：调用该工具直接报 `value[0].trace is not a declared property (additionalProperties: false)`。
+- 根因：窗口对象一直带 `trace` 字段（`lib/logic.js` 的 219/248/332 行产出），但 `lib/index.js` 里
+  工具输出 schema 声明了 `additionalProperties: false` 却没列 `trace`，宿主按 schema 校验就拒收。
+  该 schema 缺项是历史遗留，近期宿主校验变严后才暴露。
+- 修法：schema 补 `trace` 属性（object，含 cmd/created/parent/chain/script，额外键放行）。
+- 影响范围：只改声明，不改返回值与行为；工具返回内容与之前一致。
+
 ## 1.3.4 (2026-11-13) — 修复：auto-hide 刷屏（失败无 reason、无失败记忆、每轮扫描重复重试）
 
 ### 现象与实测
