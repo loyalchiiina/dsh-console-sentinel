@@ -1,3 +1,31 @@
+## 1.3.4 (2026-11-13) — 修复：auto-hide 刷屏（失败无 reason、无失败记忆、每轮扫描重复重试）
+
+### 现象与实测
+- 日志 `desktop-next-2026-11-13.0.jsonl` 里 `auto-hide failed` 共 **209 条**：其中 **208 条完全一样** `hwnd=0x22023e4 reason=unknown`，覆盖 `03:31:04.424Z → 04:31:17.308Z` **整 1 小时**（同一 runId）；另一条 `0x43a0626 reason=hwnd-not-a-window` 证明 reason 链只在 PowerShell 脚本显式写入时才生效。
+- 根因三条：① `lib/probe.js` 的 ACTION_SCRIPT 里 `hide` 的成败只由 `ok = -not $afterVisible` 算出，结果对象里**没有 reason 字段**，上层只能落到 `res.reason ?? 'unknown'` 打裸 `unknown`；② `lib/index.js` 的 `actOn()` 失败后不记账，`rec.hidden` 仍是 `false`；③ `lib/logic.js` 的 `consoleBasic()` 只看 `!rec.hidden && !rec.closed && idleSec >= threshold`，于是一个「隐藏不掉」的窗口每轮扫描都被重新选中，按默认 `scanIntervalSec=10` 重试，无退避、无冷却、无汇总。
+
+### 修复
+- `lib/probe.js`（ACTION_SCRIPT）：失败分支按实测后态产出可判别 `reason` —— `stillWindow === false` → `stale-handle`；`ok === false && afterVisible === true` → `still-visible`；其余 → `unknown-state`（不再出现裸 `unknown`）。RESULT 额外带 `pid`、`title`、`class`（`GetClassName`）、`elevated`（`OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` 失败且 `GetLastWin32Error()===5` 判定为高完整性），全部用 try/catch 包裹、取不到就省略 —— 身份探测绝不能把原本能跑通的 hide/close 搞崩。
+- `lib/index.js`（`actOn()`）：失败时记 `failCount` / `lastFailReason` / `lastFailAt`，并按 `nextEligibleAt = now + min(scanIntervalSec*1000 * 2^(failCount-1), 10min)` 指数退避；连续 3 次失败进入 `unhideableUntil` 30 分钟冷却；**`hwnd-not-a-window` 不计入 failCount、不设退避**（句柄没了按原有逻辑标 destroyed）；成功时清空全部失败记账。
+- 日志降噪：同一 hwnd 第一次失败打 `logger.warn`（带 hwnd/reason/pid/title/class/failCount/elevated），后续降为 `logger.debug`；另外按 hwnd 维护计数，每满 10 分钟或 60 次打一条汇总 `auto-hide still failing: hwnd=... reason=... retries=N since=HH:MM:SS`，汇总后计数清零、保留首次时间。
+- `lib/logic.js`（`eligibleForAuto()`）：开头加 `unhideableUntil` / `nextEligibleAt` 判断，让退避真正生效；显式 sweep 不走这条（那是用户一次性的明确请求，不是周期性重试）。
+
+### 变更
+- `package.json`：1.3.3 → 1.3.4。
+- 升级方式：宿主 `lib/index.js` / `lib/logic.js` / `lib/probe.js` 都改了 → **彻底退出 DSH 客户端再启动**（宿主是 Node 进程，无热重载）；本版未动 `lib/client.js`，客户端无需硬刷新。
+## 1.3.3 (2026-11-13) — 修复：load 层守卫改为「先确认 loader 就绪、load() 成功返回后才置位」
+
+### 修复（与 dsh-artifact-linker 0.5.6 同款缺陷）
+- `lib/client.js` 的 load 层守卫原来是「先置位 `window.__DCS_MODULE_LOADED__ = true`，再 `window.__ModuleLoader__.load(...)`」。若第一条到达的通道执行时 `window.__ModuleLoader__` 还没就绪（兜底 `<script>` 在 `<head>` 注入、loader 可能后加载），`load` 抛 `TypeError` 被外层 catch 吞掉，**但标记已经永久为 true** → 模块图那条正常通道被跳过 → 客户端再也不注册。
+- 现改为「先判断 `window.__ModuleLoader__` 存在且 `load` 是函数，`load()` 成功返回之后才置位」；loader 未就绪时直接跳过且**不置位**，把机会留给后到的通道；抛异常路径同样不置位（内层 catch 只打日志）。
+- 症状对照：本缺陷发生时设置页会整块少掉「控制台哨兵」分区，日志里仅一行 `client bundle failed to load`，容易误判成插件没装。
+- 对照案例：`dsh-artifact-linker` 同款缺陷已炸出 `client-modules: duplicate factory registration for "dsh-artifact-linker"`（那边 0.5.6 一并修掉）；本插件靠旧守卫挡住了 duplicate，却留下了「一次 TypeError 就永久跳过」这个更隐蔽的分支。
+
+### 变更
+- `lib/client.js`：守卫条件改为 `if (window.__DCS_MODULE_LOADED__ !== true && window.__ModuleLoader__ && typeof window.__ModuleLoader__.load === "function")`，`__DCS_MODULE_LOADED__ = true` 挪到 `load(...)` 的 `});` 之后。
+- `package.json`：1.3.2 → 1.3.3（内容变了，同版本号将来发不了 npm）。
+- 升级方式：本版只动客户端 bundle（宿主 `lib/index.js` 未改）→ **Ctrl+Shift+R 硬刷新**即生效，无需重启 DSH。
+
 ## 1.3.2 (2026-11-13) — 文档修正：能力边界与图标尺寸对齐实现
 
 ### 文档修正（功能一致性审计）
