@@ -1,6 +1,6 @@
 # dsh-console-sentinel
 
-> **功能描述**：桌面控制台哨兵：扫描所有控制台窗口，标出哪些已空闲或跑完，一键关闭非白名单窗口，关之前先干跑预览再确认。白名单按进程名或窗口标题子串逐条添加，宿主进程默认受保护。v1.1.0 起设置面板顶部并列两张**默认折叠**卡片——「系统控制台窗口（N 可关 · M 非DSH侧边栏 · MCP n 勿关）」与「DSH 侧边栏 · 当前面板（N）」，各自可展开逐窗关闭、也可标题行一键全关；MCP 宿主服务标红「勿关」不提供关闭按钮；图标视图的可关窗口带红 X 角标可点即关；资源管理器文件夹窗口可单关（不杀 explorer，桌面/任务栏不受影响）。适配 DSH 内核 0.2.2-rc.1。
+> **功能描述**：桌面控制台哨兵：扫描所有控制台窗口，标出哪些已空闲或跑完，一键关闭非白名单窗口，关之前先干跑预览再确认。白名单按进程名或窗口标题子串逐条添加，宿主进程默认受保护。v1.1.0 起设置面板顶部并列两张**默认折叠**卡片（当前版本 v1.3.1）——「系统控制台窗口（N 可关 · M 非DSH侧边栏 · MCP n 勿关）」与「DSH 侧边栏 · 当前面板（N）」，各自可展开逐窗关闭、也可标题行一键全关；MCP 宿主服务标红「勿关」不提供关闭按钮；图标视图的可关窗口带红 X 角标可点即关；资源管理器文件夹窗口可单关（不杀 explorer，桌面/任务栏不受影响）。适配 DSH 内核 0.2.2-rc.1。
 >
 > **English**: Desktop console watchdog: scans every console window, marks which ones are idle or finished, and closes the non-whitelisted ones in one click, with a dry-run preview and a confirm step before anything closes. Whitelist entries are one row each by process image name or window-title substring, and shell hosts are protected by default. Since v1.1.0 the settings panel opens with two collapsible cards — "System console windows (N closable · M non-DSH-sidebar · MCP n protected)" and "DSH sidebar · current panels (N)" — each expandable for per-window closing or closable in one click from its title row; MCP host services are flagged protected with no close button; closable windows in the icon grid carry a red X badge; File Explorer folder windows can be closed individually without killing explorer.exe, so the desktop and taskbar stay up. Adapts DSH kernel 0.2.2-rc.1.
 
@@ -60,7 +60,10 @@ a single yes/no prompt.
 
 ### Taskbar windows, grouped by app
 
-The **icon grid** view (default) packs every window into a compact 30×30 grid; closable windows
+The **icon grid** view (default) packs every window into a compact 36×36 grid with a 24px app
+icon; when an .exe icon cannot be extracted the cell falls back to the process-name initial
+instead of a blank box, and the process path is back-filled through `Win32_Process.ExecutablePath`
+(the host-side icon lookup). Closable windows
 carry a **red X badge** in the top-right corner (`关闭此窗口`) so a single click closes that window
 without opening anything else. Switch to **detail view** for a per-app card with full titles, a
 whitelist checkbox, `关掉该软件` (close the whole app), and a per-window `关闭` button.

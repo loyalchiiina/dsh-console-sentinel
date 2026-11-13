@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Console Sentinel",
-    "description": "Watch the browser console and DSH logs, surface errors early, and auto-hide finished console windows."
+    "description": "Keeps an eye on console windows (browser, DSH and others): flags idle or finished ones, with a taskbar icon view, empty-shell cleanup and a persistent whitelist."
   }
 }
