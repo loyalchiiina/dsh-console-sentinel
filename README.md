@@ -1,6 +1,6 @@
 # dsh-console-sentinel
 
-> **功能描述**：桌面控制台哨兵：扫描所有控制台窗口，标出哪些已空闲或跑完，一键关闭非白名单窗口，关之前先干跑预览再确认。白名单按进程名或窗口标题子串逐条添加，宿主进程默认受保护。v1.1.0 起设置面板顶部并列两张**默认折叠**卡片（当前版本 v1.3.1）——「系统控制台窗口（N 可关 · M 非DSH侧边栏 · MCP n 勿关）」与「DSH 侧边栏 · 当前面板（N）」，各自可展开逐窗关闭、也可标题行一键全关；MCP 宿主服务标红「勿关」不提供关闭按钮；图标视图的可关窗口带红 X 角标可点即关；资源管理器文件夹窗口可单关（不杀 explorer，桌面/任务栏不受影响）。适配 DSH 内核 0.2.2-rc.1。
+> **功能描述**：桌面控制台哨兵：扫描所有控制台窗口，标出哪些已空闲或跑完，一键关闭非白名单窗口，关之前先干跑预览再确认。白名单按进程名或窗口标题子串逐条添加，宿主进程默认受保护。v1.1.0 起设置面板顶部并列两张**默认折叠**卡片（当前版本 v1.4.1）——「系统控制台窗口（N 可关 · M 非DSH侧边栏 · MCP n 勿关）」与「DSH 侧边栏 · 当前面板（N）」，各自可展开逐窗关闭、也可标题行一键全关；MCP 宿主服务标红「勿关」不提供关闭按钮；图标视图的可关窗口带红 X 角标可点即关；资源管理器文件夹窗口可单关（不杀 explorer，桌面/任务栏不受影响）。适配 DSH 内核 0.2.2-rc.1。**v1.3.7 起另带「本地AI」页签**：列出当前**真正占着显存**的本地大模型服务（ComfyUI / MOSS / llama.cpp / Ollama / LM Studio / vLLM / YuE2 / CosyVoice / 换脸 / 超分……），可按需**安全释放**显存——先卸载模型（服务继续跑、下次自动重载），不行再优雅关闭，最后才强制结束；网关与额度中转站只计数、不列、不动。
 >
 > **English**: Desktop console watchdog: scans every console window, marks which ones are idle or finished, and closes the non-whitelisted ones in one click, with a dry-run preview and a confirm step before anything closes. Whitelist entries are one row each by process image name or window-title substring, and shell hosts are protected by default. Since v1.1.0 the settings panel opens with two collapsible cards — "System console windows (N closable · M non-DSH-sidebar · MCP n protected)" and "DSH sidebar · current panels (N)" — each expandable for per-window closing or closable in one click from its title row; MCP host services are flagged protected with no close button; closable windows in the icon grid carry a red X badge; File Explorer folder windows can be closed individually without killing explorer.exe, so the desktop and taskbar stay up. Adapts DSH kernel 0.2.2-rc.1.
 
@@ -127,6 +127,42 @@ before you add anything.
 
 ![Whitelist tab](docs/screenshots/panel-whitelist.png)
 
+### Local AI: release VRAM safely (since v1.3.7, stable in v1.4.1)
+
+The fourth tab, **Local AI**, answers "a local model finished and is still holding VRAM, but killing it
+means I have to restart everything".
+
+**Identification never depends on the install directory** — it works on another machine, or on a
+deployment someone else put on a different drive. Three independent kinds of evidence:
+
+| Evidence | What it covers |
+|---|---|
+| **Real VRAM holders** | the PID set from `nvidia-smi --query-compute-apps` (a GPU context is *not* the same thing as used VRAM — only this counts) |
+| **Name / path / command-line regex** | 28 families: llama.cpp, Ollama, LM Studio, vLLM, SGLang, ComfyUI, SD WebUI, Gradio, MOSS, YuE2, CosyVoice, GPT-SoVITS, Whisper, face swap, upscalers… |
+| **Listening ports** | 8188/8190 ComfyUI, 7860–7871 Gradio family, 8099 llama-server, 11434 Ollama, 1234 LM Studio… |
+
+Only **local model servers** are listed. Gateways and quota relays (`tier_router`, Agent2API, magpie,
+LiteLLM, Open WebUI…) are **counted, never listed, never touched** — that reclassification is the whole
+point of v1.4.1, which fixed them being released as if they were models.
+
+**Three release levels, gentlest first:**
+
+| Level | Method | Outcome |
+|---|---|---|
+| L1 | HTTP unload (ComfyUI `POST /free {"unload_models":true}`, Ollama `keep_alive:0`) | **model unloaded, service keeps running**, reloads automatically next time |
+| L2 | `WM_CLOSE` (`taskkill /PID n` **without** `/F`, same as Alt+F4) | the app shuts itself down cleanly |
+| L3 | `taskkill /PID n /T /F` (**only** that pid and its descendants) | forced, and the result says "forced" explicitly |
+
+**A live gateway means automatic reload.** As long as the gateway that owns the backend is still
+listening (typically `tier_router` on 8080), the next request brings the model back by itself — no manual
+restart. The panel notes state this outright: *"gateway port 8080 is listening — the next request will
+reload the model automatically"*. If the gateway is already dead, it tells you to start the router script
+first, instead of letting you believe release is self-recovering.
+
+The per-row **End** button runs the same three-level chain — it is never a bare force kill. Protected
+entries (DSH host, Electron, Fluent/MPI, system components) get no button at all. Per-process VRAM is
+only available when elevated (WDDM restriction); otherwise total process memory is shown.
+
 ## Safety model
 
 Bulk-closing windows is a destructive operation, so the plugin layers several hard guards:
@@ -142,7 +178,9 @@ Bulk-closing windows is a destructive operation, so the plugin layers several ha
 | **Foreground & self** | The focused window and the plugin's own process are skipped. |
 | **Whitelist** | Anything you tick is permanently exempt. |
 
-Graceful close (`WM_CLOSE`) is used everywhere; `taskkill /F` is deliberately **not** offered.
+**Closing windows** uses graceful `WM_CLOSE` everywhere; `taskkill /F` is deliberately **not** offered there.
+The only forced path is the Local AI tab's L3 release — scoped to the single pid you picked and its
+descendants, reached only after L1 unload and L2 graceful close both fail, and the result says "forced".
 
 ## Elevated (admin) windows
 
@@ -179,8 +217,9 @@ Defaults in `cordis.patch.yml`:
 ## Tools
 
 Host-side tools for scripted use: `console_windows_list`, `console_windows_action`,
-`console_windows_sweep`, `desktop_windows_cleanup`, plus `sentinel_whitelist` for the
-exemption list. A CLI is available via `lib/desktop-cli.mjs list|cleanup`.
+`console_windows_sweep`, `desktop_windows_cleanup`, `sentinel_whitelist` for the exemption list, and
+`ai_release_local_vram` for releasing local-model VRAM (`dryRun` / `mode` / `gpuOnly` / `protectPids`).
+A CLI is available via `lib/desktop-cli.mjs list|cleanup`.
 
 ## Licence
 

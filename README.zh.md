@@ -8,6 +8,9 @@
 关掉残留的空壳控制台、关掉 DSH 右侧边栏还开着没关的面板，关闭方式等同于对每个窗口按
 **Alt+F4**（优雅 `WM_CLOSE`，非强杀），并且**绝不碰 DSH 宿主本身、MCP 宿主服务、也绝不碰正在计算的 Fluent / MPI**。
 
+v1.3.7 起还带一个「**本地AI**」页签：列出**当前真正占着显存的本地大模型服务**（ComfyUI、MOSS、llama.cpp、Ollama、LM Studio、vLLM、YuE2、CosyVoice、换脸、超分……），
+可按需**安全释放**显存——先卸载模型（服务继续跑、下次自动重载），不行再优雅关闭，最后才强制结束。网关 / 额度中转站只计数、不列、不动。
+
 > English: [README.md](./README.md)
 
 ![面板总览](docs/screenshots/panel-taskbar.png)
@@ -87,6 +90,37 @@ Windows 上总会攒下一堆不再需要的窗口：工具留下的空 PowerShe
 
 ![白名单页](docs/screenshots/panel-whitelist.png)
 
+### 本地AI：安全释放显存（v1.3.7 起，v1.4.1 稳定）
+
+第 4 个页签「本地AI」，解决「本地模型跑完占着显存不放、又不敢强杀」的问题。
+
+**识别不靠安装目录**——换台机器、别人装在别处，照样认得出来。三路证据合并判定：
+
+| 证据 | 说明 |
+|---|---|
+| ① 是否真的占显存 | `nvidia-smi --query-compute-apps` 的 PID 集合，最硬（「有 GPU 上下文」≠「占显存」，只认这个） |
+| ② 进程名 / 路径 / 命令行正则 | 28 类：llama.cpp、Ollama、LM Studio、vLLM、SGLang、ComfyUI、SD WebUI、Gradio、MOSS、YuE2、CosyVoice、GPT-SoVITS、Whisper、换脸、超分…… |
+| ③ 监听端口 | 8188/8190 ComfyUI、7860-7871 Gradio 家族、8099 llama-server、11434 Ollama、1234 LM Studio…… |
+
+只列**本地大模型**。网关与额度中转站（`tier_router`、Agent2API、magpie、LiteLLM、Open WebUI…）
+**只计数、不列、不动**——这是 v1.4.1 修复的重点（此前它们会被误当成模型释放掉）。
+
+**三级释放，越靠前越温和：**
+
+| 级别 | 手段 | 结果 |
+|---|---|---|
+| L1 | HTTP 卸载（ComfyUI `POST /free {"unload_models":true}`、Ollama `keep_alive:0`） | **模型卸载、服务继续跑**，下次出图/对话自动重载 |
+| L2 | `WM_CLOSE`（`taskkill /PID n` **不带** `/F`，等同 Alt+F4） | 软件自己收尾退出 |
+| L3 | `taskkill /PID n /T /F`（**只**连带该 pid 的子孙） | 强制结束，结果里明确标「强制」 |
+
+**网关活着 = 下次自动重载。** 只要托管它的网关还在监听（典型如 `tier_router` 的 8080），
+释放掉后端之后下一次对话会自动把模型拉起来，不需要手动启动。面板 notes 会直接写明
+「网关端口 8080 正在监听 —— 释放模型后下次对话会自动重新加载」。反过来，如果网关本来就死了，
+它会提示你先启动网关脚本——不会让你误以为「释放完就能自动恢复」。
+
+**单行「结束」按钮走同一套三级链**，不是直接强杀。受保护项（DSH 宿主、Electron、Fluent/MPI、系统组件）
+不给按钮。逐进程显存只在管理员权限下可得（WDDM 限制），否则只展示进程总内存。
+
 ## 安全模型
 
 批量关窗口是不可逆操作，因此叠加了多重硬保护：
@@ -102,7 +136,9 @@ Windows 上总会攒下一堆不再需要的窗口：工具留下的空 PowerShe
 | **前台与自身** | 当前焦点窗口、插件自身进程一律跳过。 |
 | **白名单** | 你勾选过的软件永久豁免。 |
 
-全链路只用优雅关闭（`WM_CLOSE`），**刻意不提供 `taskkill /F` 强杀**。
+**关闭窗口**全链路只用优雅关闭（`WM_CLOSE`），**刻意不提供 `taskkill /F` 强杀**。
+唯一的强制入口是「本地AI」页签的 L3 释放——只针对你亲手选中的那一个 pid 及其子孙，
+且只在 L1 卸载与 L2 优雅关闭都失败后才走到，结果里会写明「强制」。
 
 ## 管理员窗口关不掉怎么办
 
@@ -138,7 +174,8 @@ dsh plugin --profile desktop add dsh-console-sentinel
 ## 工具
 
 宿主侧工具：`console_windows_list`、`console_windows_action`、`console_windows_sweep`、
-`desktop_windows_cleanup`，以及管理豁免清单的 `sentinel_whitelist`。
+`desktop_windows_cleanup`、管理豁免清单的 `sentinel_whitelist`，
+以及释放本地模型显存的 `ai_release_local_vram`（参数 `dryRun` / `mode` / `gpuOnly` / `protectPids`）。
 命令行：`lib/desktop-cli.mjs list|cleanup`。
 
 ## 许可

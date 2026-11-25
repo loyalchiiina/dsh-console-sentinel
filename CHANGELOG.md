@@ -1,3 +1,175 @@
+## 1.4.1 (2026-11-25) — 修复「安全释放之后本地模型再也点不出来」
+
+### 现象（用户原话）
+「我刚才测试了本地模型开启之后我安全释放，然后再去对话就启动不了了」。
+
+即：本地模型能用 → 点「安全释放」→ 显存确实还回来了 → 但再对话时 DSH 报连不上（8080 拒绝连接），模型彻底点不出来。
+
+### 根因（两条，叠加才出事）
+1. **识别顺序错，把网关当成了模型。** `classifyProcess()` 先跑 `MODEL_RULES` 再判网关。本机 `tier_router.py` 的进程名是 `python.exe`、路径是共享的 DSH runtime python，名字和路径都认不出它是网关 —— 它靠**监听 8080** 才暴露身份。旧代码里这个证据排得太靠后，于是它被当成「本地大模型」，直接进入释放候选。日志证据：`ai/release: mode=graceful released=2 failed=0 forced=1 freedMiB=15183` —— 应有 1 个模型，实际放了 2 个。
+2. **CTRL_BREAK 那一层是霰弹枪。** 旧 L3 用 `FreeConsole → AttachConsole(pid) → GenerateConsoleCtrlEvent(1, 0)`。第二个参数是**进程组 id，传 0 = 向整个共享控制台的所有进程广播**。实测 `llama-server` 的 ppid 正是 `tier_router`，两者同控制台 —— 给子进程发 CTRL_BREAK，父进程一起收到。证据：router 日志最后一行就是一行裸 `^C`，Python 直接 KeyboardInterrupt 退出，无 traceback。
+
+网关一死，`ensure_tier()` 的自动重启逻辑就没人执行了 —— 这才是「下次吊不起来」的真正原因（**不是**端口残留）。
+
+### 修复
+- **整层删除 L3 CTRL_BREAK**（`ctrlBreakScript` / `ctrlBreak` 全部移除），释放层级改为 L1 HTTP 卸载 → L2 WM_CLOSE → L3 强制。文件顶部与函数上方各写一段事故注释，注明「Windows 上没有只给单个子进程发 Ctrl+C 的可靠办法，这层只能删不能收窄」。
+- **`classifyProcess()` 判定顺序重排**：① 监听网关端口（3000/4000/5000/5001/8080/3065/17819/3425/18500）→ 直接判 gateway；② 名字/路径命中网关名单 → gateway；③ `MODEL_RULES`；④ 模型端口。**网关证据的优先级必须高于模型规则**，这是本次事故的核心。
+- `collectAiStatus().notes` 新增**网关在跑状态**：检测到 3000/4000/5000/5001/8080 在监听时明确写「释放模型后下次对话会自动重新加载，不需要手动启动」；一个都没在监听则提示「释放后要手动启动网关」。用户之前完全看不出网关已经死了，这条就是补这个盲区。
+- 工具 description、`mode` 参数说明、面板 title、`killGpuOther` 成功文案同步去掉 CTRL_BREAK，并把「已强制结束（下次请用原启动脚本重启）」改成「已强制结束（有父级网关托管的话，下次请求会自动重新拉起）」—— 前者是错的，后者才是实际行为。
+
+### 验证
+- `classifyProcess('python','C:\\py\\python.exe',[8080])` → `{kind:'gateway', key:'port:8080'}`（旧版返回 model）
+- `classifyProcess('python',…,[8099])` → model（不被误排除）
+- `classifyProcess('python',…,[8188])` → model（ComfyUI 正常）
+- `collectAiStatus({probeBusy:true})` 实跑：`gatewayCount=3`、清单里**没有** tier_router 那一行、`releasableCount=2`（llama-server + ComfyUI）、notes 出现「网关端口 8080 正在监听 —— 释放模型后下次对话会自动重新加载」
+- 父子关系实测：`llama-server pid=815152 ppid=823668(tier_router)` —— 直接印证「同控制台广播」这条根因
+- 三文件 `node --check` 通过
+
+### 教训
+「优雅」不是「信号更高级」就等于更安全。**向控制台发 Ctrl+Break 在 Windows 上是批量杀伤**，对「进程 A 是进程 B 的父进程」这种拓扑毫无感知。以后凡是释放第三方进程，只允许「对单个 PID 操作」的原语（`taskkill /PID n`、HTTP 卸载、WM_CLOSE），**永远不要用进程组/控制台级广播**。
+
+---
+
+## 1.4.0 (2026-11-25) — 「安全优雅释放」+ 通用识别（换机器 / 别人装的也能认）
+
+### 用户诉求（本版的两个原因）
+1. 原话：「我想要的控制台的ai显存识别是指的是能够安全释放掉，比如我用本地模型调用后会占用显存，以及我用生图或者其他的本地部署或者是生歌的本地部署的我希望识别到他们然后我可以安全的释放掉，下次用不影响使用，你之前的属于直接强制关掉下次再用吊不起来，然后这个本地ai显存占用我只需要这些大模型部署的清单，什么网关什么我通通不需要」。
+   → 释放必须**优雅**（不能一律 `taskkill /F`）；只列本地大模型，网关不列不动；释放完下次要能正常用。
+2. 原话：「这个本地部署不单单是我自己用，别人安装也能识别出来」。
+   → 识别**不得依赖安装目录**（旧实现靠 `<安装盘>:\...\LocalAI\` 这类路径特征，换台机器 / 别人装到别的盘就全失效）。
+
+### 识别：三路证据，不认目录
+- **① 是否真的占显存（最硬）**：`nvidia-smi --query-compute-apps=pid,process_name` 的 PID 集合。别人的机器、别人的目录，只要模型吃显存就会被抓到。
+- **② 软件特征**：28 条 `MODEL_RULES` 对「进程名 + 可执行路径」正则匹配（llama.cpp / Ollama / LM Studio / vLLM / SGLang / KoboldCpp / text-generation-webui / Jan / GPT4All / TabbyAPI / llamafile / TGI-MLX / Xinference / FastChat / AnythingLLM / Aphrodite / ComfyUI / SD WebUI / MOSS 生图 / MiniMax H3 视频 / 换脸·姿势控制 / 超分 / Kohya / YuE2 生歌 / 语音克隆 / ASR）。
+- **明确删掉「按安装目录名识别」**：旧的 `local-?ai` 规则会把同一目录下无关的 python（ansys-mcp、训练脚本）全标成同一个软件；别人装在 `D:\AI\`、`E:\models\` 更认不出。识别只认软件自身特征。
+- **③ 端口提示**：本地服务常见端口（11434 / 1234 / 8188 / 8189 / 7860–7871 / 8000 / 5000 …）交叉确认身份 —— `python` 进程的 `Path` 只是解释器路径、命令行又拿不到，端口是 Gradio / ComfyUI 家族的主要证据。
+- **兜底**：「占显存但认不出软件」的进程列进「未识别的本地模型」区；过滤「有 GPU 上下文的小进程」（任务管理器/输入法/系统外壳），判据 = 常驻内存 ≥300 MB 或自己监听端口。
+
+### 释放：四级优雅，逐级降级
+- **L1 服务自己的卸载接口**（首选，服务不退出、下次自动重载）：
+  - ComfyUI `POST /free {"unload_models":true,"free_memory":true}` —— `server.py` 原生端点，队列忙时延后到当前任务结束，不打断出图。
+  - Ollama `POST /api/generate {"keep_alive":0}`。
+- **L2 `WM_CLOSE`**：`taskkill /PID n`（不带 `/F`），有消息循环的进程走正常退出。
+- **L3 `CTRL_BREAK`**：`FreeConsole → AttachConsole → GenerateConsoleCtrlEvent(1,0)`，控制台程序（llama-server、ComfyUI 的 cmd 宿主）能收到 Ctrl-C，落盘后正常退出。
+- **L4 强杀**：`taskkill /PID n /T /F`，**只在 1~3 全失败时**，返回体标 `method:'force'` + 界面提示「下次请用原启动脚本重启」。
+- 每级 `waitMs`（默认 8 s），全部结束后 `settleMs`（默认 1.5 s）复查显存算 `freedMiB`；`results[].steps[]` 记录每一级的结果，看得清走到哪一步。
+
+### 网关：不列、不动、只计数
+- `GATEWAY_EXCLUDE_RE`（tier_router / LiteLLM / One-API / Agent2API / magpie / LobsterAI / OpenSquilla / TokenRhythm / AutoClaw / Hermes …）命中即跳过，只累加 `gatewayCount`，notes 写「已忽略 N 个网关（不占显存，本页不显示也不动）」。
+- 删除 `skippedGateways` 字段与「先模型后网关」的旧顺序逻辑（`includeGateways` 在 1.3.9 已删净）。
+
+### 面板
+- 列表分三段：**本地大模型服务** → **未识别的本地模型** → **受保护（仅占显存的才列）**。
+- 每行标记：「占显存 / 未占显存」「忙」（队列有任务）「可卸载」（L1 可用），右侧单项「结束」走同一套优雅释放。
+- 按钮 `一键释放` → **`安全释放`**；确认态先列出 `label(pid)` 清单再等第二次点击。
+- 结果按 method 分项统计：`卸载 N 个（服务仍在运行，下次自动重载）` / `已优雅关闭 N 个` / `强制结束 N 个（下次请用原启动脚本重启）`，再拼失败数与释放量。
+- 删掉旧的「其他 GPU 进程」折叠区（被「未识别的本地模型」取代）。
+
+### 实测（本机 2026-11-25，只读 + dryRun）
+- `collectAiStatus({probeBusy:true})` 耗时 **4.2 s**；`gpus=1`，`totals=22792/24467 MiB`。
+- 正确识别 **ComfyUI**：`python` pid 804680、11.69 GB、端口 8188、`unload.unloadKind='comfyui'`、`detail='队列 running=0 pending=0'`（可卸载）；`releasableCount=1`。
+- `unknownCount=0`（任务管理器这类小 GPU 进程被过滤）、`gatewayCount=2`（magpie / magpie-bun 不显示也不动）。
+- 8 个 4 MB 的 ansys-mcp python 不再占屏（受保护且未占显存 → 隐藏，`protectedHiddenCount`）。
+- `perProcessMem=false`（WDDM 非管理员拿不到逐进程显存），界面用「占显存」标记代替具体 MB，notes 已说明。
+- 真实释放未在会话内执行（ComfyUI 正被使用中），只跑 `dryRun` 与只读查询。
+
+### 变更 / 生效方式
+- 文件：`lib/ai.js`（重写，887 行）、`lib/index.js`（工具 schema + `/ai/status`、`/ai/release`、`/ai/kill`）、`lib/client.js`（面板重做）。
+- 版本 1.3.9 → **1.4.0**。
+- 生效：**彻底退出 DSH 客户端再启动**（宿主 Node 进程，无热重载）；客户端 bundle 改动用 `Ctrl+Shift+R` 硬刷新。
+
+---
+
+## 1.3.9 (2026-11-21) — 一键释放改为「只释放占显存的模型服务」，网关一律不碰
+
+### 用户纠正（这是本版的唯一原因）
+- 用户原话：「你这有问题我只要释放占用显存的，网关不需要释放」。
+- 1.3.7 / 1.3.8 的实现默认 `includeGateways: true`，一键释放会连带结束 Agent2API / magpie / tier_router 这类**不占显存**的额度中转与档位路由。理由写在旧版 CHANGELOG（「只杀模型的话网关会立刻把模型拉回来」），但这属于**替用户做决定**：用户要的是「腾显存」，不是「关中转站」。
+
+### 改法
+- `releaseLocalAi()` 重写筛选条件：候选 = `kind === 'model'` **且** `onGpu === true`（出现在 `nvidia-smi --query-compute-apps` 里的才算「占显存」）。`kind === 'gateway'` 与 `kind === 'other'` 一律不进候选，代码里不再有「先模型后网关」的顺序逻辑。
+- 新增 `gpuOnly` 参数（默认 `true`）；当 `nvidia-smi` 的 compute-apps 查询不可用（`tools.computeApps === false`，非 NVIDIA 或驱动受限）时自动退化，避免「全都判成没占显存 → 一个都不释放」。
+- 返回体改为 `{ok, dryRun, gpuOnly, appsKnown, freedMiB, totalFreedMiB, candidates, skippedGateways, killed, failed, before, after}`；**删除了 `includeGateways` 字段**（`index.js` 工具 schema、`/ai/release` 路由、`client.js` 请求体三处同步改净，全库 grep 残留 0）。
+- `skippedGateways` 只作**如实提示**：告诉用户「这 N 个网关没动、不占显存、若它按需拉起模型显存会回来」，而不是偷偷杀掉它们。
+- 网关仍然可以停 —— 但只在进程列表里点该行的「结束」单项手动停（复用 `/ai/kill` → `releasePid()`），不再混进一键释放。
+- `collectAiStatus().releasableCount` 的口径同步收紧为「未受保护 且 `kind === 'model'` 且占显存」，与一键释放完全同源 —— 否则会出现「状态说 3 个可释放、一键释放说 0 个」的自相矛盾（本机实测改后两处都是 0，一致）。
+
+### 面板文案
+- 进程列表说明：「一键释放只结束占显存的模型服务，网关不参与（网关不占显存；需要时点该行的「结束」单项停掉）」。
+- 确认态：「确认释放？将结束 N 个占显存的模型服务，网关不动」—— N 由前端按同一条件自行计数（`gpuReleaseCandidates()`），不再用含网关的 `releasableCount`。
+- 完成后若存在网关：「…。网关未动（N 个，不占显存）；若显存稍后回升，是该网关按需把模型重新拉起了 —— 需要彻底断掉时点对应行的「结束」。」
+
+### 本机实测（2026-11-21 17:2x）
+- 当时模型已被用户自行释放：GPU 已用 3372 / 24467 MiB（空闲 20842）。`releaseLocalAi({dryRun:true})` 返回 `candidates: 0`、`skippedGateways: ["magpie", "magpie-bun"]`、`gpuOnly: true`、`appsKnown: true` —— 正是期望行为：没有模型就不杀任何东西，网关照旧活着。
+- 保护逻辑复验：`protectReason('DSH NEXT')` → 「DSH / 系统外壳相关进程（不参与结束）」；`magpie` / `llama-server` / `python` → 空串（可手动结束）。
+
+### 生效方式
+- `lib/index.js` / `lib/ai.js`（宿主端）→ **彻底退出 DSH 客户端再启动**。
+- `lib/client.js`（客户端 bundle）→ **Ctrl+Shift+R 硬刷新**。
+
+## 1.3.8 (2026-11-21) — 「本地AI」覆盖面扩到「不管开什么都能关」+ 其他 GPU 进程兜底
+
+### 为什么加这一版
+- 用户追问：「不管我开什么本地部署的模型都可以关掉，什么 moss、什么 comfyui、什么余额、yue2 等等」。1.3.7 只认 15 类模型 + 4 类网关，MOSS / ComfyUI / 换脸控制台 / Agent2API 额度中转站 / YuE2 音乐模型都漏在网外。
+
+### 规则表全量补齐
+- 模型类 15 → **25 类**：新增 `xinference`、`fastchat`、`anythingllm`（AnythingLLM / Msty）、`moss`（MOSS 生图 / MOSS-Qwen 换脸）、`faceswap`（faceswap / VNCCS / PoseStudio / BFS / inswapper / roop）、`upscale`（GFPGAN / CodeFormer / Real-ESRGAN / facexlib / 手部修复）、`kohya`（kohya / sd-scripts / diffusers 训练）、`yue2`（YuE2 / ACE-Step / MusicGen / AudioCraft）、`voice`（CosyVoice / So-VITS / GPT-SoVITS / ChatTTS / IndexTTS / Bark）、`asr`（Whisper / faster-whisper）。
+- 网关类 4 → **10 类**：新增 `agent2api`（Agent2API 额度中转站）、`magpie`（magpie 账号聚合）、`lobster`（LobsterAI 控制台）、`opensquilla`（OpenSquilla / TokenRhythm）、`autoclaw`（AutoClaw / AutoGLM）、`hermes`。
+- 端口线索 14 → **24 条**：新增 7861/7862/7864/7865（Gradio 家族）、**7870 换脸 / 姿势控制台**、7871、8190（ComfyUI）、**3065 Agent2API**、**17819 LobsterAI**、**3425 / 18500 magpie**；7860 标签改为「Gradio WebUI（MOSS / YuE2 / 语音克隆常见）」。
+- python 跑什么脚本从 `Get-Process` 的 Path 看不出来（Path 只是解释器路径），所以 **端口是识别 Gradio / ComfyUI 家族的主力证据**，规则表按这条原则补齐。
+
+### 新增「其他 GPU 进程」兜底 + 单进程结束
+- 规则认不出来的、但确实占着显存的进程，现在会以「其他 GPU 进程（N）」折叠区列在面板里，每行一个「结束」按钮（新接口 `POST /dsh-console-sentinel/ai/kill`，内部 `releasePid()`）。规则没覆盖到的新软件也能手动清掉，不必等版本更新。
+- 噪音过滤：浏览器 / QQ / 微信 / Office / 终端 / 远程控制 / VPN / 任务管理器等日常程序的 GPU 上下文一律不入列表（实测把 42 个持有 GPU 上下文的进程压到 1 个 Taskmgr）。
+- 本机实测（2026-11-21 15:2x）：`agent2api` PID 614320 → 3065、`magpie` PID 7672 → 3425、`magpie-bun` PID 611060 → 18500、`python` PID 680768 → 8080（tier_router）、`llama-server` PID 30732 → 8099，共 **5 个候选**，顺序是先模型后网关。
+
+### 安全加固：新增 NEVER_KILL_RE（非锚定）
+- 1.3.7 的 `PROTECT_NAME_RE` 是精确匹配，遇到带空格的进程名会漏 —— 实测 `DSH NEXT`（496 MB GPU 上下文）当时被列进了「其他 GPU 进程」并且带「结束」按钮，这是危险的。
+- 新增 `NEVER_KILL_RE`（非锚定匹配）：`dsh` / `dsh next` / `deepseek` / `electron` / `tabtip` / `ctfmon` / `textinputhost` / `piliaurora` / `bilibili` / `iscrrec` / `wechatappex` / `shellhost` / `shellexperiencehost` / `searchhost` / `conhost` / `windowsterminal` / `mintty` / `gameviewer` —— 命中即视为受保护，既不出现在可结束列表，`releasePid` 也会直接拒绝。
+- 修掉一处致命笔误：`OTHER_GPU_EXCLUDE_RE` 初版尾部误写 `|qw$(?!)/i`，会让整条正则语法错；同时新 `AI_PATH_RE` 与原文件旧声明重复，`node --check` 报 `SyntaxError: Identifier 'AI_PATH_RE' has already been declared`。两者均已修正并复验通过。
+
+### 变更文件
+- `lib/ai.js`：规则表 / 端口表 / NEVER_KILL_RE / `gpuOthers` 收集 / 新增导出 `releasePid()`。
+- `lib/index.js`：import `releasePid`，新增 `/ai/kill` 路由（走既有 loopback `guard`）。
+- `lib/client.js`：`cache.aiOthersOpen`、`killGpuOther()`、`renderAi()` 里的「其他 GPU 进程」折叠区与「结束」按钮。
+
+### 生效方式
+- `lib/index.js` / `lib/ai.js`（宿主端）→ **彻底退出 DSH 客户端再启动**（宿主是 Node 进程，无热重载）。
+- `lib/client.js`（客户端 bundle）→ **Ctrl+Shift+R 硬刷新**。
+
+## 1.3.7 (2026-11-21) — 新增「本地AI」页签：显存一览 + 一键释放
+
+### 是什么
+- 设置页新增第 4 个页签「本地AI」：显存条（已用 / 总量 / 百分比，≥85% 红、≥60% 主色、其余绿）、每张卡的空闲量与占用率、识别到的本地 AI 进程（模型服务 + 本地网关），右上「刷新」与「一键释放」。
+- 「一键释放」是两步式：第一次点击只进确认态（红色描边「确认释放」并列出将结束几个进程），第二次才真正执行；执行完自动复查一次状态并报「结束 N 个 / 释放约 X GB」。
+
+### 识别口径（三路证据）
+- 进程名 / 路径正则 15 类：llama.cpp(llama-server、llama-cli)、Ollama、LM Studio、vLLM、SGLang、KoboldCpp、text-generation-webui、LocalAI、Jan、GPT4All、TabbyAPI、llamafile、TGI / MLX、ComfyUI、SD WebUI。
+- 网关 4 类：tier_router、LiteLLM、One-API / New-API、Open WebUI。
+- 端口线索（中等置信，`via:'port'`）：11434、1234、7860、7863、8188、8189、8099、8081、3000、4000、5000、5001、8000、**8080**。
+- 本机实测：`llama-server` PID 30732（via=name、端口 8099、占显存）＋ `python` PID 680768（via=port 8080，tier_router 档位路由），`node` 进程全部正确排除。
+
+### 释放顺序为什么先模型、后网关
+- 本机实证：只杀 `llama-server` 的话，`tier_router`（8080）在下一次请求时立刻把模型重新拉起来 —— 2026-11-21 14:57 释放后用户「不小心又对话」就复现了一次（新 PID 重新占 6.5 GB）。所以 `releaseLocalAi()` 先结束模型、再结束网关，`includeGateways` 默认 true。
+
+### 性能：一次采样约 3.3 s（返工两轮才到这个数）
+- `Get-CimInstance Win32_Process` 单条过滤 ≈ 5 s（4 条 20.5 s，首版采集 22.1 s，废弃）；全量枚举 39 s；`wmic` 本机已移除；`pwsh -Command "Get-Process | Select ... CommandLine"` 逐进程读 PEB，实测 **>120 s 跑不完**。
+- 最终：一次 `powershell.exe` 里 `Get-Process`（含 Path，0.39 s / 477 进程）+ `Get-NetTCPConnection -State Listen`（1.68 s / 55 监听），整次 `collectAiStatus` 实测 **2.83 ~ 3.29 s**。为避免每轮重采样，只在切进该页签或手动刷新时拉。
+
+### WDDM 限制（如实说明，不装成有逐进程读数）
+- `nvidia-smi --query-compute-apps=...used_memory` 在非管理员下全部返回 `[N/A]`，且会把浏览器 / QQ 等「有 GPU 上下文」的进程也列进来（本机 38 个，其中 4 个进程名是 `[Insufficient Permissions]`）。所以 `perProcessMem=false` 时面板不展示逐进程 MB，改为在说明里讲清；实际回收量用 `nvidia-smi` 总量前后差算（`freedMiB`）。
+
+### 安全
+- 受保护清单：DSH 宿主 / electron / Fluent / fl_mpi / mpiexec / ansys / spaceclaim / workbench，以及 svchost、system、services、explorer、csrss、wininit、winlogon、lsass 等系统进程永不结束；`node` 进程除非路径命中 AI 目录否则一律保护（防误杀插件运行时）。
+- 两个路由都走既有 `guard`（仅回环）；`/ai/release` 默认 `dryRun:true`，必须显式传 `false` 才真动手。新增工具 `ai_release_local_vram` 同样默认 dry-run。
+
+### 变更
+- 新增 `lib/ai.js`（约 380 行，零外部依赖）。
+- `lib/index.js`：import + `/ai/status`、`/ai/release` 两个路由 + `ai_release_local_vram` 工具。
+- `lib/client.js`：`cache` 加 ai 字段、`setActiveTab` 的 panels/tabs 映射加 `ai`、`TABS` 加第 4 项、新增 `panel(TABS[3])`、`renderAll` 调 `renderAi`、新增 `paintAiBtn` 两态按钮。
+- `locale/zh.json`、`locale/en.json`：`meta.description` 补上「一键释放本地 AI 显存」。
+- 升级方式：`lib/index.js` / 新增 `lib/ai.js` → **彻底退出 DSH 客户端再启动**（宿主是 Node 进程，无热重载）；`lib/client.js` → 启动后 **Ctrl+Shift+R** 硬刷新（Ctrl+R 只从内存缓存重载，不重新读盘）。
+
 ## 1.3.6 (2026-11-16)
 
 ### 图标配色：写死品牌色，深色主题下不再看不清

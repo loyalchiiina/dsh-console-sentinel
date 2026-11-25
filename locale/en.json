@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Console Sentinel",
-    "description": "Keeps an eye on console windows (browser, DSH and others): flags idle or finished ones, with a taskbar icon view, empty-shell cleanup and a persistent whitelist."
+    "description": "Keeps an eye on console windows (browser, DSH and others): flags idle or finished ones, with a taskbar icon view, empty-shell cleanup and a persistent whitelist. Also detects local model services generically (no install-path dependency, so any machine or someone else's setup is recognised) and releases VRAM the safe, graceful way: unload the model while the service keeps running, then step down to graceful shutdown, and only then a labelled force-kill. Gateways (tier routers) are never terminated — as long as one is alive, the next request reloads the model automatically."
   }
 }
