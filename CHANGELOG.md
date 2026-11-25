@@ -1,3 +1,23 @@
+## 1.4.2 (2026-11-26) — 只允许手动刷新（去掉自动刷新，修复客户端卡顿）
+
+### 现象（用户原话）
+「我发现好像现在客户端突然变卡是因为安装了控制台哨兵，是因为他频繁刷新，更改插件刷新频次不可自动刷新只允许手动刷新」
+
+### 根因（两处自动刷新叠加）
+1. 客户端 lib/client.js：面板可见时 setInterval(..., 3000) —— 每 3 秒同时打 /taskbar-windows（宿主枚举全部窗口）和 /status。
+2. 宿主 lib/index.js：scanTimer（每 scanIntervalSec = 10s 起一次 PowerShell 探测：枚举全部窗口 + 每窗口采样 CPU）＋ supervisorTimer（自我修复，再扫一遍）。
+   客户端 3s 一轮的 /status 本身很快，但宿主每 10s 的 PowerShell 探测是重活，两者叠加即「频繁刷新 + renderer 抖动」。
+
+### 改法（最小改动，不动其余功能）
+- 客户端：删除 AUTO_MS 定时器与 startAutoRefresh() 的定时逻辑；installVisibilityHooks() 不再在「重新可见」时重拉数据；SettingsSection 挂载时不再启动自动刷新。
+  数据只在**用户点「刷新」按钮**（efreshAll()）或**切换页签**时拉取。刷新按钮加了 tooltip「手动刷新（面板不再自动刷新，点它才拉最新状态）」。
+- 宿主：删除 scanTimer / supervisorTimer 两个后台定时器，改为 nsureFreshScan(maxAgeMs)（去重 + 合并并发，避免叠多个 PowerShell 进程）：
+  挂载时扫一次（台账有底），/status 懒加载时若台账超过 TTL 才重扫，各操作路由与宿主工具照旧调用 scan()。
+- 副作用（符合「只允许手动」）：utoAction / mptyConsoleAction 的自动动作只在**用户操作触发扫描时**顺带执行，不再在用户不操作时自己动窗口。
+- scanIntervalSec 配置项保留（失败退避重试间隔仍用到它），但不再决定任何后台定时器。
+
+### 生效
+宿主半 lib/index.js 与 package.json 需**彻底退出 DSH 再启动**；客户端半 lib/client.js 需 **Ctrl+Shift+R 硬刷新**（Ctrl+R 只走内存缓存，会误判「改了没用」）。
 ## 1.4.1 (2026-11-25) — 修复「安全释放之后本地模型再也点不出来」
 
 ### 现象（用户原话）
