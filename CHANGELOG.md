@@ -1,3 +1,35 @@
+## 1.4.3 (2026-11-26) — 只在设置面板打开时运行（面板关着 = 一个 PowerShell 都不起）
+
+### 现象（用户原话）
+「检查这个插件的刷新周期是否变成了只能手动刷新我不希望他造成我使用的卡顿」
+「就是我只需要我打开的设置界面的时候采取用这个插件我不打开设置界面我希望他是不运行的」
+
+1.4.2 把定时器全删了，但「手动」并不等于「不跑」：挂载扫一次、`/status` 每次请求无条件扫一次、
+开面板/切页签/点刷新都触发一次**完整 PowerShell 探测，实测每次 8.7~9.7 秒**。用户体感就是卡。
+
+### 根因（两条，叠加才出现 ~9 秒阻塞）
+1. **运行模型错**：插件的存活与设置面板是否打开无关 —— 只要宿主在跑，任何一次路由请求都可能起一次探测。
+2. **探测脚本里有 WMI**：`Get-CimInstance Win32_Process` 单次耗时 **7.2 秒**（本机实测：全表 6.8 s、单条 `-Filter ProcessId=xxx` 7.3 s、按进程名 6.9 s，任何写法都秒级）。更关键的一条实测结论：**只要 PowerShell 脚本「文本里」出现 `Get-CimInstance` 这个词，即使那段代码根本没执行，也要多付 ~6.8 秒**（同一份脚本删掉该段 8951 ms → 2107 ms，三组对照复现）。
+
+### 改法
+- **新增 `panelOnly` 配置（默认 true）**：挂载不再扫描，`panelOnly=false` 时才保留「挂载扫一次」的旧行为。
+- **新增 `POST /panel-beat` 心跳路由**：这是唯一的常态触发点。客户端只在**设置面板真实可见**时每 30 s 发一次心跳，心跳里跑一次轻量探针 + 空壳 auto-hide；面板隐藏/关闭 → 彻底静默。
+- **客户端判定改用真实锚点**：旧的 `.dcs-root` 选择器在客户端 bundle 里根本不存在，等于永远判成「面板没打开」；改用 `dcs-upd-btn / dcs-counts / dcs-taskbar` 的盒子尺寸判可见性。
+- **`lib/probe.js`**：把「全表 CIM 溯源」整段外置成 `PROBE_TRACE_BLOCK`，常态脚本用纯 ASCII 锚点 `#PROBE-TRACE-SLOT` 按需拼接 → **7876/7505 ms → 1106/1116 ms**（ok=true，80 窗口照常枚举）。
+- **`lib/desktop.js`**：拆成 `warm`（默认，跳过 WMI 回填，用 `$null = $null` 空语句占位）/ `live` 两档，WMI 回填段搬到 `DESKTOP_PROBE_LIVE_BACKFILL` → **9281/8919 ms → 1919/1782 ms**（ok=true，13 窗口）。
+- **补回「隐藏窗口跨重启补显」**：隐藏台账落盘到 `console-sentinel-hidden.json`，扫描前先 `checkRestore()` 还原插件上一轮 hide 掉的窗口。
+- `/status` 改为 `ensureFreshScan(0, true)`，并发请求共享同一次扫描（`scanInFlight` 合流），不再叠多个 PowerShell 进程。
+
+### 实测证据（Windows 11，2026-11-26）
+- 不开面板 60 s 轮询：`powershell.exe` 进程数 **20 → 20**，零新增；33 s 高频采样新 spawn = **0**。
+- 面板开过后退出，30 s + 48 s 采样：**0**（唯一一次捕获是工具层 shell，存活 <4 s，无 conhost 伴随）。
+- 新路由存在性对比：`/dsh-console-sentinel/panel-beat` → 401（注册了），不存在的 `/no-such-plugin-xyz/status` → 404。
+- WMI-Activity 日志计数：warm 探针前后 `Win32_Process` 事件 delta = 0。
+
+### 生效
+宿主半 `lib/index.js` / `lib/desktop.js` / `lib/probe.js` 需**彻底退出 DSH 客户端再启动**（宿主是 Node 进程，无热重载）；
+客户端半 `lib/client.js` 需 **Ctrl+Shift+R 硬刷新**（Ctrl+R 只走内存缓存，会误判「改了没用」）。
+
 ## 1.4.2 (2026-11-26) — 只允许手动刷新（去掉自动刷新，修复客户端卡顿）
 
 ### 现象（用户原话）
